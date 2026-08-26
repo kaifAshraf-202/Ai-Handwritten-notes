@@ -13,6 +13,12 @@ import numpy as np
 class VisualClassification:
     """
     Classification result for a merged visual region.
+
+    Confidence is stored internally in the range:
+        0.0 -> 1.0
+
+    Example:
+        0.95 = 95%
     """
 
     region_id: int
@@ -51,11 +57,10 @@ class VisualClassification:
 # ============================================================
 
 class VisualCandidateClassifier:
-
     """
-    Heuristic classifier for merged visual regions.
+    Conservative heuristic classifier for merged visual regions.
 
-    Classification types:
+    Supported classifications:
 
         diagram
         handwriting
@@ -65,42 +70,58 @@ class VisualCandidateClassifier:
         text_artifact
         unknown
 
-    Important design principle:
+    Important principle:
 
-        We NEVER discard a region merely because it
-        contains OCR.
+        A visual contour is NOT automatically a diagram.
 
-    Chemistry diagrams often contain:
+    A chemistry diagram usually contains structural evidence such as:
 
-        - labels
-        - symbols
-        - numbers
-        - equations
+        - connected lines
+        - bonds
         - arrows
-        - printed text
+        - rings
+        - symbols
+        - labels
+        - geometric structure
 
-    Therefore OCR overlap is only one signal.
+    Therefore classification uses multiple signals:
+
+        OCR overlap
+        visual ink
+        colour
+        yellow
+        pink
+        edges
+        region size
+        aspect ratio
     """
 
     def __init__(
         self,
-
         text_overlap_threshold: float = 0.75,
 
-        # Minimum coloured-pixel ratio.
         color_threshold: float = 0.05,
 
-        # Yellow highlighting threshold.
         yellow_threshold: float = 0.04,
 
-        # Pink/magenta handwriting threshold.
         pink_threshold: float = 0.04,
 
         visual_threshold: float = 0.04,
 
         edge_threshold: float = 0.025,
 
+        # Minimum area for a real diagram.
         min_visual_area: int = 1200,
+
+        # More conservative threshold.
+        min_diagram_area: int = 5000,
+
+        # Very small regions are rarely complete diagrams.
+        small_region_area: int = 8000,
+
+        # Large regions are more likely to contain
+        # meaningful visual structures.
+        large_region_area: int = 30000,
     ):
 
         self.text_overlap_threshold = (
@@ -131,6 +152,18 @@ class VisualCandidateClassifier:
             min_visual_area
         )
 
+        self.min_diagram_area = (
+            min_diagram_area
+        )
+
+        self.small_region_area = (
+            small_region_area
+        )
+
+        self.large_region_area = (
+            large_region_area
+        )
+
     # ========================================================
     # GENERIC REGION ACCESS
     # ========================================================
@@ -142,10 +175,7 @@ class VisualCandidateClassifier:
         default=0
     ):
 
-        if isinstance(
-            region,
-            dict
-        ):
+        if isinstance(region, dict):
 
             return region.get(
                 key,
@@ -156,6 +186,47 @@ class VisualCandidateClassifier:
             region,
             key,
             default
+        )
+
+    # ========================================================
+    # CREATE RESULT
+    # ========================================================
+
+    @staticmethod
+    def _result(
+        region_id,
+        classification,
+        confidence,
+        x,
+        y,
+        width,
+        height,
+        area,
+        ocr_overlap_ratio,
+        visual_ink_ratio,
+        color_ratio,
+        yellow_ratio,
+        pink_ratio,
+        edge_ratio,
+        reason,
+    ):
+
+        return VisualClassification(
+            region_id=region_id,
+            classification=classification,
+            confidence=float(confidence),
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            area=area,
+            ocr_overlap_ratio=ocr_overlap_ratio,
+            visual_ink_ratio=visual_ink_ratio,
+            color_ratio=color_ratio,
+            yellow_ratio=yellow_ratio,
+            pink_ratio=pink_ratio,
+            edge_ratio=edge_ratio,
+            reason=reason,
         )
 
     # ========================================================
@@ -225,8 +296,7 @@ class VisualCandidateClassifier:
                 )
             )
 
-            # Only reliable OCR is used for the
-            # text-overlap calculation.
+            # Only reliable OCR contributes.
             if confidence < 70:
                 continue
 
@@ -263,7 +333,6 @@ class VisualCandidateClassifier:
 
             wx1 = wx
             wy1 = wy
-
             wx2 = wx + ww
             wy2 = wy + wh
 
@@ -423,14 +492,10 @@ class VisualCandidateClassifier:
                 "edge_ratio": 0.0,
             }
 
-        # ----------------------------------------------------
-        # RGB
-        # ----------------------------------------------------
-
         crop_rgb = crop[:, :, :3]
 
         # ----------------------------------------------------
-        # Grayscale
+        # GRAYSCALE
         # ----------------------------------------------------
 
         gray = cv2.cvtColor(
@@ -438,9 +503,9 @@ class VisualCandidateClassifier:
             cv2.COLOR_RGB2GRAY
         )
 
-        # ====================================================
-        # BACKGROUND-AWARE INK DETECTION
-        # ====================================================
+        # ----------------------------------------------------
+        # BACKGROUND-AWARE INK
+        # ----------------------------------------------------
 
         median_brightness = float(
             np.median(gray)
@@ -448,20 +513,12 @@ class VisualCandidateClassifier:
 
         if median_brightness < 128:
 
-            # Dark page background.
-            #
-            # Ink/text is brighter than background.
-            #
             visual_mask = (
                 gray > 45
             )
 
         else:
 
-            # Light page background.
-            #
-            # Ink/text is darker than background.
-            #
             visual_mask = (
                 gray < 220
             )
@@ -473,9 +530,9 @@ class VisualCandidateClassifier:
             / visual_mask.size
         )
 
-        # ====================================================
+        # ----------------------------------------------------
         # HSV
-        # ====================================================
+        # ----------------------------------------------------
 
         hsv = cv2.cvtColor(
             crop_rgb,
@@ -487,7 +544,7 @@ class VisualCandidateClassifier:
         value = hsv[:, :, 2]
 
         # ----------------------------------------------------
-        # Coloured pixels
+        # COLOUR
         # ----------------------------------------------------
 
         colored_pixels = (
@@ -503,9 +560,9 @@ class VisualCandidateClassifier:
             / colored_pixels.size
         )
 
-        # ====================================================
-        # YELLOW DETECTION
-        # ====================================================
+        # ----------------------------------------------------
+        # YELLOW
+        # ----------------------------------------------------
 
         yellow_mask = (
             (hue >= 15)
@@ -524,9 +581,9 @@ class VisualCandidateClassifier:
             / yellow_mask.size
         )
 
-        # ====================================================
-        # PINK / MAGENTA DETECTION
-        # ====================================================
+        # ----------------------------------------------------
+        # PINK / MAGENTA
+        # ----------------------------------------------------
 
         pink_mask = (
             (
@@ -553,9 +610,9 @@ class VisualCandidateClassifier:
             / pink_mask.size
         )
 
-        # ====================================================
-        # EDGE DETECTION
-        # ====================================================
+        # ----------------------------------------------------
+        # EDGE
+        # ----------------------------------------------------
 
         edges = cv2.Canny(
             gray,
@@ -571,7 +628,6 @@ class VisualCandidateClassifier:
         )
 
         return {
-
             "visual_ink_ratio": float(
                 visual_ink_ratio
             ),
@@ -648,8 +704,34 @@ class VisualCandidateClassifier:
             width * height
         )
 
+        # Avoid invalid geometry.
+        if width <= 0 or height <= 0:
+
+            return self._result(
+                region_id,
+                "unknown",
+                0.50,
+                x,
+                y,
+                width,
+                height,
+                area,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                "Invalid region geometry."
+            )
+
+        aspect_ratio = (
+            max(width, height)
+            / max(1, min(width, height))
+        )
+
         # ----------------------------------------------------
-        # OCR overlap
+        # OCR
         # ----------------------------------------------------
 
         ocr_overlap_ratio = (
@@ -660,7 +742,7 @@ class VisualCandidateClassifier:
         )
 
         # ----------------------------------------------------
-        # Visual metrics
+        # IMAGE METRICS
         # ----------------------------------------------------
 
         metrics = (
@@ -670,25 +752,25 @@ class VisualCandidateClassifier:
             )
         )
 
-        visual_ink_ratio = metrics[
-            "visual_ink_ratio"
-        ]
+        visual_ink_ratio = (
+            metrics["visual_ink_ratio"]
+        )
 
-        color_ratio = metrics[
-            "color_ratio"
-        ]
+        color_ratio = (
+            metrics["color_ratio"]
+        )
 
-        yellow_ratio = metrics[
-            "yellow_ratio"
-        ]
+        yellow_ratio = (
+            metrics["yellow_ratio"]
+        )
 
-        pink_ratio = metrics[
-            "pink_ratio"
-        ]
+        pink_ratio = (
+            metrics["pink_ratio"]
+        )
 
-        edge_ratio = metrics[
-            "edge_ratio"
-        ]
+        edge_ratio = (
+            metrics["edge_ratio"]
+        )
 
         # ====================================================
         # RULE 1
@@ -700,49 +782,22 @@ class VisualCandidateClassifier:
             >= self.yellow_threshold
         ):
 
-            return VisualClassification(
-
-                region_id=region_id,
-
-                classification="highlight",
-
-                confidence=0.95,
-
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-
-                area=area,
-
-                ocr_overlap_ratio=(
-                    ocr_overlap_ratio
-                ),
-
-                visual_ink_ratio=(
-                    visual_ink_ratio
-                ),
-
-                color_ratio=(
-                    color_ratio
-                ),
-
-                yellow_ratio=(
-                    yellow_ratio
-                ),
-
-                pink_ratio=(
-                    pink_ratio
-                ),
-
-                edge_ratio=(
-                    edge_ratio
-                ),
-
-                reason=(
-                    "Strong yellow/golden "
-                    "colour detected."
-                ),
+            return self._result(
+                region_id,
+                "highlight",
+                0.95,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Strong yellow/golden colour detected."
             )
 
         # ====================================================
@@ -755,169 +810,108 @@ class VisualCandidateClassifier:
             >= self.pink_threshold
         ):
 
-            # Very thin pink region is more likely an
-            # underline/annotation than handwriting.
+            # Thin horizontal mark.
             if (
                 height <= 45
-                and
-                width >= 80
+                and width >= 80
             ):
 
-                return VisualClassification(
-
-                    region_id=region_id,
-
-                    classification="annotation",
-
-                    confidence=0.91,
-
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-
-                    area=area,
-
-                    ocr_overlap_ratio=(
-                        ocr_overlap_ratio
-                    ),
-
-                    visual_ink_ratio=(
-                        visual_ink_ratio
-                    ),
-
-                    color_ratio=(
-                        color_ratio
-                    ),
-
-                    yellow_ratio=(
-                        yellow_ratio
-                    ),
-
-                    pink_ratio=(
-                        pink_ratio
-                    ),
-
-                    edge_ratio=(
-                        edge_ratio
-                    ),
-
-                    reason=(
-                        "Pink/magenta coloured "
-                        "thin annotation or "
-                        "underline."
-                    ),
+                return self._result(
+                    region_id,
+                    "annotation",
+                    0.91,
+                    x,
+                    y,
+                    width,
+                    height,
+                    area,
+                    ocr_overlap_ratio,
+                    visual_ink_ratio,
+                    color_ratio,
+                    yellow_ratio,
+                    pink_ratio,
+                    edge_ratio,
+                    "Pink/magenta coloured thin annotation or underline."
                 )
 
-            return VisualClassification(
-
-                region_id=region_id,
-
-                classification="handwriting",
-
-                confidence=0.90,
-
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-
-                area=area,
-
-                ocr_overlap_ratio=(
-                    ocr_overlap_ratio
-                ),
-
-                visual_ink_ratio=(
-                    visual_ink_ratio
-                ),
-
-                color_ratio=(
-                    color_ratio
-                ),
-
-                yellow_ratio=(
-                    yellow_ratio
-                ),
-
-                pink_ratio=(
-                    pink_ratio
-                ),
-
-                edge_ratio=(
-                    edge_ratio
-                ),
-
-                reason=(
-                    "Strong pink/magenta "
-                    "handwritten or coloured "
-                    "annotation content."
-                ),
+            return self._result(
+                region_id,
+                "handwriting",
+                0.90,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Strong pink/magenta handwritten or coloured annotation content."
             )
 
         # ====================================================
         # RULE 3
-        # SMALL OCR ARTIFACT
+        # VERY SMALL REGION
         # ====================================================
 
-        if (
-            area
-            < self.min_visual_area
-        ):
+        if area < self.min_visual_area:
 
+            # Small regions with OCR are usually
+            # text fragments / OCR artifacts.
             if (
                 ocr_overlap_ratio
-                >= 0.50
+                >= 0.35
             ):
 
-                return VisualClassification(
+                return self._result(
+                    region_id,
+                    "text_artifact",
+                    0.92,
+                    x,
+                    y,
+                    width,
+                    height,
+                    area,
+                    ocr_overlap_ratio,
+                    visual_ink_ratio,
+                    color_ratio,
+                    yellow_ratio,
+                    pink_ratio,
+                    edge_ratio,
+                    "Small region associated with OCR text."
+                )
 
-                    region_id=region_id,
+            # Small black graphical pieces should NOT
+            # automatically become diagrams.
+            if (
+                edge_ratio
+                >= self.edge_threshold
+            ):
 
-                    classification="text_artifact",
-
-                    confidence=0.96,
-
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-
-                    area=area,
-
-                    ocr_overlap_ratio=(
-                        ocr_overlap_ratio
-                    ),
-
-                    visual_ink_ratio=(
-                        visual_ink_ratio
-                    ),
-
-                    color_ratio=(
-                        color_ratio
-                    ),
-
-                    yellow_ratio=(
-                        yellow_ratio
-                    ),
-
-                    pink_ratio=(
-                        pink_ratio
-                    ),
-
-                    edge_ratio=(
-                        edge_ratio
-                    ),
-
-                    reason=(
-                        "Small region with "
-                        "strong OCR overlap."
-                    ),
+                return self._result(
+                    region_id,
+                    "graphic",
+                    0.72,
+                    x,
+                    y,
+                    width,
+                    height,
+                    area,
+                    ocr_overlap_ratio,
+                    visual_ink_ratio,
+                    color_ratio,
+                    yellow_ratio,
+                    pink_ratio,
+                    edge_ratio,
+                    "Small graphical structure detected; insufficient evidence for a complete diagram."
                 )
 
         # ====================================================
         # RULE 4
-        # MOSTLY OCR BUT STRUCTURAL
+        # HIGH OCR OVERLAP
         # ====================================================
 
         if (
@@ -925,166 +919,185 @@ class VisualCandidateClassifier:
             >= self.text_overlap_threshold
         ):
 
-            if (
+            # If OCR dominates and there isn't strong
+            # structural evidence, preserve as text.
+            if not (
                 edge_ratio
-                >= self.edge_threshold
+                >= self.edge_threshold * 1.5
                 and
                 visual_ink_ratio
                 >= self.visual_threshold
+                and
+                area
+                >= self.min_diagram_area
             ):
 
-                return VisualClassification(
-
-                    region_id=region_id,
-
-                    classification="diagram",
-
-                    confidence=0.80,
-
-                    x=x,
-                    y=y,
-                    width=width,
-                    height=height,
-
-                    area=area,
-
-                    ocr_overlap_ratio=(
-                        ocr_overlap_ratio
-                    ),
-
-                    visual_ink_ratio=(
-                        visual_ink_ratio
-                    ),
-
-                    color_ratio=(
-                        color_ratio
-                    ),
-
-                    yellow_ratio=(
-                        yellow_ratio
-                    ),
-
-                    pink_ratio=(
-                        pink_ratio
-                    ),
-
-                    edge_ratio=(
-                        edge_ratio
-                    ),
-
-                    reason=(
-                        "Contains OCR but also "
-                        "contains structural "
-                        "graphical content."
-                    ),
+                return self._result(
+                    region_id,
+                    "text_artifact",
+                    0.90,
+                    x,
+                    y,
+                    width,
+                    height,
+                    area,
+                    ocr_overlap_ratio,
+                    visual_ink_ratio,
+                    color_ratio,
+                    yellow_ratio,
+                    pink_ratio,
+                    edge_ratio,
+                    "Region is dominated by reliable OCR."
                 )
 
-            return VisualClassification(
-
-                region_id=region_id,
-
-                classification="text_artifact",
-
-                confidence=0.90,
-
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-
-                area=area,
-
-                ocr_overlap_ratio=(
-                    ocr_overlap_ratio
-                ),
-
-                visual_ink_ratio=(
-                    visual_ink_ratio
-                ),
-
-                color_ratio=(
-                    color_ratio
-                ),
-
-                yellow_ratio=(
-                    yellow_ratio
-                ),
-
-                pink_ratio=(
-                    pink_ratio
-                ),
-
-                edge_ratio=(
-                    edge_ratio
-                ),
-
-                reason=(
-                    "Region is dominated "
-                    "by reliable OCR."
-                ),
+            # OCR + strong structure + sufficient size.
+            return self._result(
+                region_id,
+                "diagram",
+                0.82,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Reliable OCR is present together with substantial structural graphical evidence."
             )
 
         # ====================================================
         # RULE 5
-        # LARGE STRUCTURAL GRAPHIC
+        # CLEAR DIAGRAM
         # ====================================================
 
-        if (
-            area >= self.min_visual_area
-            and
+        strong_structure = (
             edge_ratio
             >= self.edge_threshold
+        )
+
+        enough_ink = (
+            visual_ink_ratio
+            >= self.visual_threshold
+        )
+
+        enough_size = (
+            area
+            >= self.min_diagram_area
+        )
+
+        # A real diagram should generally have
+        # meaningful dimensions rather than being
+        # a tiny isolated contour.
+        reasonable_shape = (
+            width >= 60
+            and height >= 40
+        )
+
+        # Very thin regions are usually lines,
+        # underlines, borders, or artifacts.
+        not_too_thin = (
+            aspect_ratio <= 12
+        )
+
+        if (
+            strong_structure
+            and enough_ink
+            and enough_size
+            and reasonable_shape
+            and not_too_thin
         ):
 
-            return VisualClassification(
+            # Larger regions get stronger confidence.
+            if area >= self.large_region_area:
 
-                region_id=region_id,
+                confidence = 0.90
 
-                classification="diagram",
+            else:
 
-                confidence=0.84,
+                confidence = 0.84
 
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-
-                area=area,
-
-                ocr_overlap_ratio=(
-                    ocr_overlap_ratio
-                ),
-
-                visual_ink_ratio=(
-                    visual_ink_ratio
-                ),
-
-                color_ratio=(
-                    color_ratio
-                ),
-
-                yellow_ratio=(
-                    yellow_ratio
-                ),
-
-                pink_ratio=(
-                    pink_ratio
-                ),
-
-                edge_ratio=(
-                    edge_ratio
-                ),
-
-                reason=(
-                    "Large region containing "
-                    "structural graphical "
-                    "content."
-                ),
+            return self._result(
+                region_id,
+                "diagram",
+                confidence,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Region has sufficient size and structural graphical evidence for a diagram."
             )
 
         # ====================================================
         # RULE 6
-        # GRAPHIC
+        # MEDIUM GRAPHIC
+        # ====================================================
+
+        if (
+            strong_structure
+            and enough_ink
+            and area >= self.min_visual_area
+        ):
+
+            return self._result(
+                region_id,
+                "graphic",
+                0.75,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Graphical content detected, but evidence is insufficient for a full diagram."
+            )
+
+        # ====================================================
+        # RULE 7
+        # COLOURED VISUAL CONTENT
+        # ====================================================
+
+        if (
+            color_ratio
+            >= self.color_threshold
+        ):
+
+            return self._result(
+                region_id,
+                "graphic",
+                0.74,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Coloured visual content detected."
+            )
+
+        # ====================================================
+        # RULE 8
+        # GENERAL VISUAL CONTENT
         # ====================================================
 
         if (
@@ -1092,99 +1105,45 @@ class VisualCandidateClassifier:
             >= self.visual_threshold
         ):
 
-            return VisualClassification(
-
-                region_id=region_id,
-
-                classification="graphic",
-
-                confidence=0.70,
-
-                x=x,
-                y=y,
-                width=width,
-                height=height,
-
-                area=area,
-
-                ocr_overlap_ratio=(
-                    ocr_overlap_ratio
-                ),
-
-                visual_ink_ratio=(
-                    visual_ink_ratio
-                ),
-
-                color_ratio=(
-                    color_ratio
-                ),
-
-                yellow_ratio=(
-                    yellow_ratio
-                ),
-
-                pink_ratio=(
-                    pink_ratio
-                ),
-
-                edge_ratio=(
-                    edge_ratio
-                ),
-
-                reason=(
-                    "Meaningful non-text "
-                    "visual content detected."
-                ),
+            return self._result(
+                region_id,
+                "graphic",
+                0.68,
+                x,
+                y,
+                width,
+                height,
+                area,
+                ocr_overlap_ratio,
+                visual_ink_ratio,
+                color_ratio,
+                yellow_ratio,
+                pink_ratio,
+                edge_ratio,
+                "Meaningful non-text visual content detected."
             )
 
         # ====================================================
-        # RULE 7
+        # RULE 9
         # UNKNOWN
         # ====================================================
 
-        return VisualClassification(
-
-            region_id=region_id,
-
-            classification="unknown",
-
-            confidence=0.50,
-
-            x=x,
-            y=y,
-            width=width,
-            height=height,
-
-            area=area,
-
-            ocr_overlap_ratio=(
-                ocr_overlap_ratio
-            ),
-
-            visual_ink_ratio=(
-                visual_ink_ratio
-            ),
-
-            color_ratio=(
-                color_ratio
-            ),
-
-            yellow_ratio=(
-                yellow_ratio
-            ),
-
-            pink_ratio=(
-                pink_ratio
-            ),
-
-            edge_ratio=(
-                edge_ratio
-            ),
-
-            reason=(
-                "Insufficient evidence "
-                "for stronger classification."
-            ),
+        return self._result(
+            region_id,
+            "unknown",
+            0.50,
+            x,
+            y,
+            width,
+            height,
+            area,
+            ocr_overlap_ratio,
+            visual_ink_ratio,
+            color_ratio,
+            yellow_ratio,
+            pink_ratio,
+            edge_ratio,
+            "Insufficient evidence for stronger classification."
         )
 
     # ========================================================

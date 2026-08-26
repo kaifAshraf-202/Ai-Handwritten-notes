@@ -16,6 +16,10 @@ from backend.services.visual_merger import (
     VisualMerger
 )
 
+from backend.services.visual_classifier import (
+    VisualCandidateClassifier
+)
+
 from backend.services.semantic_grouper import (
     SemanticGrouper
 )
@@ -41,6 +45,10 @@ def main():
     print("     HANDNOTE AI - SEMANTIC GROUPER")
     print("=" * 48)
 
+    # --------------------------------------------------------
+    # Validate PDF
+    # --------------------------------------------------------
+
     if not PDF_PATH.exists():
 
         raise FileNotFoundError(
@@ -55,202 +63,278 @@ def main():
         PDF_PATH
     )
 
-    page = document.load_page(
-        0
-    )
+    try:
 
-    # --------------------------------------------------------
-    # Render
-    # --------------------------------------------------------
+        page = document.load_page(
+            0
+        )
 
-    print(
-        "\nRendering page..."
-    )
+        # ----------------------------------------------------
+        # Render page
+        # ----------------------------------------------------
 
-    pixmap = page.get_pixmap(
-        dpi=200,
-        alpha=False
-    )
+        print(
+            "\nRendering page..."
+        )
 
-    image = Image.open(
-        BytesIO(
-            pixmap.tobytes(
-                "png"
+        pixmap = page.get_pixmap(
+            dpi=200,
+            alpha=False
+        )
+
+        image = Image.open(
+            BytesIO(
+                pixmap.tobytes(
+                    "png"
+                )
+            )
+        ).convert(
+            "RGB"
+        )
+
+        print(
+            f"Image size: "
+            f"{image.width} x "
+            f"{image.height}"
+        )
+
+        # ----------------------------------------------------
+        # OCR
+        # ----------------------------------------------------
+
+        print(
+            "\nRunning OCR..."
+        )
+
+        ocr_result = (
+            extract_text_with_data(
+                image=image,
+                language="eng",
+                psm=3
             )
         )
-    ).convert(
-        "RGB"
-    )
 
-    print(
-        f"Image size: "
-        f"{image.width} x "
-        f"{image.height}"
-    )
-
-    # --------------------------------------------------------
-    # OCR
-    # --------------------------------------------------------
-
-    print(
-        "\nRunning OCR..."
-    )
-
-    ocr_result = (
-        extract_text_with_data(
-            image
+        ocr_words = (
+            ocr_result["words"]
         )
-    )
 
-    ocr_words = (
-        ocr_result["words"]
-    )
-
-    print(
-        f"OCR words: "
-        f"{len(ocr_words)}"
-    )
-
-    # --------------------------------------------------------
-    # Region detection
-    # --------------------------------------------------------
-
-    print(
-        "\nRunning region detection..."
-    )
-
-    detector = RegionDetector()
-
-    visual_candidates = (
-        detector.detect_contours(
-            image
+        print(
+            f"OCR words: "
+            f"{len(ocr_words)}"
         )
-    )
 
-    print(
-        f"Raw visual candidates: "
-        f"{len(visual_candidates)}"
-    )
+        # ----------------------------------------------------
+        # Region detection
+        # ----------------------------------------------------
 
-    # --------------------------------------------------------
-    # Visual merger
-    # --------------------------------------------------------
-
-    print(
-        "\nRunning visual merger..."
-    )
-
-    merger = VisualMerger()
-
-    merged_regions = (
-        merger.merge(
-            visual_candidates
+        print(
+            "\nRunning region detection..."
         )
-    )
 
-    print(
-        f"Merged visual regions: "
-        f"{len(merged_regions)}"
-    )
+        detector = RegionDetector()
 
-    # --------------------------------------------------------
-    # Semantic grouping
-    # --------------------------------------------------------
-
-    print(
-        "\nRunning semantic grouping..."
-    )
-
-    grouper = SemanticGrouper()
-
-    result = (
-        grouper.analyze_page(
-            merged_regions,
-            ocr_words
+        visual_candidates = (
+            detector.detect_contours(
+                image
+            )
         )
-    )
 
-    # --------------------------------------------------------
-    # Results
-    # --------------------------------------------------------
+        print(
+            f"Raw visual candidates: "
+            f"{len(visual_candidates)}"
+        )
 
-    print()
-    print("=" * 48)
-    print("        SEMANTIC REGIONS")
-    print("=" * 48)
+        # ----------------------------------------------------
+        # Visual merger
+        # ----------------------------------------------------
 
-    for region in result["regions"]:
+        print(
+            "\nRunning visual merger..."
+        )
+
+        merger = VisualMerger()
+
+        merged_regions = (
+            merger.merge(
+                visual_candidates
+            )
+        )
+
+        print(
+            f"Merged visual regions: "
+            f"{len(merged_regions)}"
+        )
+
+        # ----------------------------------------------------
+        # Visual classification
+        # ----------------------------------------------------
+
+        print(
+            "\nRunning visual classification..."
+        )
+
+        classifier = (
+            VisualCandidateClassifier()
+        )
+
+        classifications = (
+            classifier.classify(
+                image,
+                merged_regions,
+                ocr_words
+            )
+        )
+
+        print(
+            f"Visual classifications: "
+            f"{len(classifications)}"
+        )
+
+        # ----------------------------------------------------
+        # Semantic grouping
+        # ----------------------------------------------------
+
+        print(
+            "\nRunning semantic grouping..."
+        )
+
+        grouper = SemanticGrouper()
+
+        result = (
+            grouper.analyze_page(
+                visual_regions=merged_regions,
+                ocr_words=ocr_words,
+                classifications=classifications
+            )
+        )
+
+        # ----------------------------------------------------
+        # Results
+        # ----------------------------------------------------
 
         print()
+        print("=" * 48)
+        print("        SEMANTIC REGIONS")
+        print("=" * 48)
 
-        print(
-            f"[R{region['region_id']}] "
-            f"{region['region_type'].upper()}"
-        )
+        for region in result["regions"]:
 
-        print(
-            "    "
-            f"bbox=("
-            f"{region['x']}, "
-            f"{region['y']}, "
-            f"{region['width']}, "
-            f"{region['height']}"
-            ")"
-        )
+            print()
 
-        text = (
-            region["metadata"]
-            .get(
+            print(
+                f"[R{region['region_id']}] "
+                f"{region['region_type'].upper()}"
+            )
+
+            print(
+                "    "
+                f"bbox=("
+                f"{region['x']}, "
+                f"{region['y']}, "
+                f"{region['width']}, "
+                f"{region['height']}"
+                ")"
+            )
+
+            metadata = region.get(
+                "metadata",
+                {}
+            )
+
+            text = metadata.get(
                 "text",
                 ""
             )
-        )
 
-        if text:
+            if text:
 
-            print(
-                f"    text={text}"
+                print(
+                    f"    text={text}"
+                )
+
+            parent_id = region.get(
+                "parent_region_id",
+                None
             )
 
+            print(
+                "    "
+                f"parent={parent_id}"
+            )
+
+            # ------------------------------------------------
+            # Classifier information
+            # ------------------------------------------------
+
+            classifier_confidence = (
+                metadata.get(
+                    "classifier_confidence",
+                    0.0
+                )
+            )
+
+            classifier_reason = (
+                metadata.get(
+                    "classifier_reason",
+                    ""
+                )
+            )
+
+            if classifier_confidence:
+
+                print(
+                    "    "
+                    f"classifier_confidence="
+                    f"{classifier_confidence:.2f}%"
+                )
+
+            if classifier_reason:
+
+                print(
+                    "    "
+                    f"reason="
+                    f"{classifier_reason}"
+                )
+
+        # ----------------------------------------------------
+        # Summary
+        # ----------------------------------------------------
+
+        print()
+        print("=" * 48)
+        print("          GROUPING SUMMARY")
+        print("=" * 48)
+
+        for region_type, count in sorted(
+            result["counts"].items()
+        ):
+
+            print(
+                f"{region_type:<18}"
+                f"{count}"
+            )
+
+        print()
         print(
-            "    "
-            f"parent="
-            f"{region['parent_region_id']}"
+            f"Total semantic regions: "
+            f"{result['total']}"
         )
 
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
-
-    print()
-    print("=" * 48)
-    print("          GROUPING SUMMARY")
-    print("=" * 48)
-
-    for region_type, count in sorted(
-        result["counts"].items()
-    ):
-
+        print()
+        print("=" * 48)
         print(
-            f"{region_type:<18}"
-            f"{count}"
+            "   SEMANTIC GROUPING COMPLETED"
         )
+        print("=" * 48)
 
-    print()
-    print(
-        f"Total semantic regions: "
-        f"{result['total']}"
-    )
+    finally:
 
-    print()
-    print("=" * 48)
-    print(
-        "   SEMANTIC GROUPING COMPLETED"
-    )
-    print("=" * 48)
+        document.close()
 
-    document.close()
 
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
     main()

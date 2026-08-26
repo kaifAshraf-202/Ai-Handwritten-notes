@@ -4,7 +4,7 @@ from io import BytesIO
 import pymupdf
 from PIL import Image
 
-from backend.services.ocr import extract_ocr_data
+from backend.services.ocr import extract_text_with_data
 from backend.services.region_detector import RegionDetector
 from backend.services.visual_region_merger import (
     VisualRegionMerger
@@ -93,7 +93,7 @@ def main():
             "\nRunning OCR..."
         )
 
-        ocr_result = extract_ocr_data(
+        ocr_result = extract_text_with_data(
             image=image,
             language="eng",
             psm=3
@@ -218,3 +218,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+    

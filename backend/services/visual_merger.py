@@ -8,6 +8,10 @@ from typing import List, Dict, Any
 
 @dataclass
 class MergedVisualRegion:
+    """
+    Represents one logical visual region created by merging
+    multiple OpenCV contour candidates.
+    """
 
     region_id: int
 
@@ -40,52 +44,42 @@ class MergedVisualRegion:
 # ============================================================
 
 class VisualMerger:
-
     """
-    Conservative visual-region merger.
+    Merge raw OpenCV visual candidates into logical visual
+    regions.
 
-    IMPORTANT:
+    Design goals:
 
-    The merger should NOT combine an entire page into
-    one region simply because several small contours
-    happen to be close to each other.
-
-    We therefore use:
-
-        1. Strong overlap
-        2. Small spatial gap
-        3. Similar region scale
-        4. Protection against giant-region swallowing
+    1. Merge overlapping contours.
+    2. Merge contours that are inside another contour.
+    3. Merge nearby components when they clearly belong together.
+    4. Prevent a large region from swallowing unrelated content.
+    5. Avoid merging across large whitespace.
+    6. Preserve separate diagrams/annotations when possible.
     """
 
     def __init__(
         self,
-
-        iou_threshold: float = 0.10,
-
-        proximity_threshold: int = 25,
-
+        iou_threshold: float = 0.08,
+        containment_threshold: float = 0.65,
+        proximity_threshold: int = 18,
+        max_gap: int = 30,
         padding: int = 8,
-
-        max_gap: int = 35,
-
-        max_size_ratio: float = 4.0,
-
+        max_size_ratio: float = 12.0,
+        max_merged_width: int = 1800,
+        max_merged_height: int = 900,
+        page_swallow_ratio: float = 0.72,
     ):
 
         self.iou_threshold = iou_threshold
-
-        self.proximity_threshold = (
-            proximity_threshold
-        )
-
-        self.padding = padding
-
+        self.containment_threshold = containment_threshold
+        self.proximity_threshold = proximity_threshold
         self.max_gap = max_gap
-
-        self.max_size_ratio = (
-            max_size_ratio
-        )
+        self.padding = padding
+        self.max_size_ratio = max_size_ratio
+        self.max_merged_width = max_merged_width
+        self.max_merged_height = max_merged_height
+        self.page_swallow_ratio = page_swallow_ratio
 
     # ========================================================
     # GENERIC ACCESS
@@ -95,107 +89,77 @@ class VisualMerger:
     def get_value(
         region,
         key: str,
-        default=0
+        default=0,
     ):
 
-        if isinstance(
-            region,
-            dict
-        ):
-
+        if isinstance(region, dict):
             return region.get(
                 key,
-                default
+                default,
             )
 
         return getattr(
             region,
             key,
-            default
+            default,
         )
 
     # ========================================================
-    # CONVERT TO DICT
+    # CONVERT REGION TO DICT
     # ========================================================
 
     @staticmethod
     def region_to_dict(
-        region
+        region,
     ) -> Dict[str, Any]:
 
-        if isinstance(
-            region,
-            dict
-        ):
+        if isinstance(region, dict):
+            return dict(region)
 
-            return dict(
-                region
-            )
-
-        if hasattr(
-            region,
-            "to_dict"
-        ):
-
+        if hasattr(region, "to_dict"):
             return region.to_dict()
 
         return {
-
-            "region_id":
-                getattr(
-                    region,
-                    "region_id",
-                    0
-                ),
-
-            "region_type":
-                getattr(
-                    region,
-                    "region_type",
-                    "visual_candidate"
-                ),
-
-            "x":
-                getattr(
-                    region,
-                    "x",
-                    0
-                ),
-
-            "y":
-                getattr(
-                    region,
-                    "y",
-                    0
-                ),
-
-            "width":
-                getattr(
-                    region,
-                    "width",
-                    0
-                ),
-
-            "height":
-                getattr(
-                    region,
-                    "height",
-                    0
-                ),
-
-            "confidence":
-                getattr(
-                    region,
-                    "confidence",
-                    0.0
-                ),
-
-            "source":
-                getattr(
-                    region,
-                    "source",
-                    "unknown"
-                ),
+            "region_id": getattr(
+                region,
+                "region_id",
+                0,
+            ),
+            "region_type": getattr(
+                region,
+                "region_type",
+                "visual_candidate",
+            ),
+            "x": getattr(
+                region,
+                "x",
+                0,
+            ),
+            "y": getattr(
+                region,
+                "y",
+                0,
+            ),
+            "width": getattr(
+                region,
+                "width",
+                0,
+            ),
+            "height": getattr(
+                region,
+                "height",
+                0,
+            ),
+            "confidence": getattr(
+                region,
+                "confidence",
+                0.0,
+            ),
+            "source": getattr(
+                region,
+                "source",
+                "unknown",
+            ),
         }
 
     # ========================================================
@@ -205,14 +169,14 @@ class VisualMerger:
     @classmethod
     def area(
         cls,
-        region
-    ):
+        region,
+    ) -> int:
 
         width = int(
             cls.get_value(
                 region,
                 "width",
-                0
+                0,
             )
         )
 
@@ -220,11 +184,63 @@ class VisualMerger:
             cls.get_value(
                 region,
                 "height",
-                0
+                0,
             )
         )
 
-        return width * height
+        return max(
+            0,
+            width * height,
+        )
+
+    # ========================================================
+    # BOUNDS
+    # ========================================================
+
+    @classmethod
+    def bounds(
+        cls,
+        region,
+    ):
+
+        x = int(
+            cls.get_value(
+                region,
+                "x",
+                0,
+            )
+        )
+
+        y = int(
+            cls.get_value(
+                region,
+                "y",
+                0,
+            )
+        )
+
+        width = int(
+            cls.get_value(
+                region,
+                "width",
+                0,
+            )
+        )
+
+        height = int(
+            cls.get_value(
+                region,
+                "height",
+                0,
+            )
+        )
+
+        return (
+            x,
+            y,
+            x + width,
+            y + height,
+        )
 
     # ========================================================
     # IOU
@@ -234,111 +250,55 @@ class VisualMerger:
     def calculate_iou(
         cls,
         region_a,
-        region_b
+        region_b,
     ) -> float:
 
-        ax1 = int(
-            cls.get_value(
-                region_a,
-                "x"
-            )
+        ax1, ay1, ax2, ay2 = cls.bounds(
+            region_a
         )
 
-        ay1 = int(
-            cls.get_value(
-                region_a,
-                "y"
-            )
+        bx1, by1, bx2, by2 = cls.bounds(
+            region_b
         )
-
-        aw = int(
-            cls.get_value(
-                region_a,
-                "width"
-            )
-        )
-
-        ah = int(
-            cls.get_value(
-                region_a,
-                "height"
-            )
-        )
-
-        bx1 = int(
-            cls.get_value(
-                region_b,
-                "x"
-            )
-        )
-
-        by1 = int(
-            cls.get_value(
-                region_b,
-                "y"
-            )
-        )
-
-        bw = int(
-            cls.get_value(
-                region_b,
-                "width"
-            )
-        )
-
-        bh = int(
-            cls.get_value(
-                region_b,
-                "height"
-            )
-        )
-
-        ax2 = ax1 + aw
-        ay2 = ay1 + ah
-
-        bx2 = bx1 + bw
-        by2 = by1 + bh
 
         ix1 = max(
             ax1,
-            bx1
+            bx1,
         )
 
         iy1 = max(
             ay1,
-            by1
+            by1,
         )
 
         ix2 = min(
             ax2,
-            bx2
+            bx2,
         )
 
         iy2 = min(
             ay2,
-            by2
+            by2,
         )
 
         iw = max(
             0,
-            ix2 - ix1
+            ix2 - ix1,
         )
 
         ih = max(
             0,
-            iy2 - iy1
+            iy2 - iy1,
         )
 
-        intersection = (
-            iw * ih
+        intersection = iw * ih
+
+        area_a = cls.area(
+            region_a
         )
 
-        area_a = (
-            aw * ah
-        )
-
-        area_b = (
-            bw * bh
+        area_b = cls.area(
+            region_b
         )
 
         union = (
@@ -350,141 +310,203 @@ class VisualMerger:
         if union <= 0:
             return 0.0
 
-        return (
-            intersection / union
-        )
+        return intersection / union
 
     # ========================================================
-    # BOUNDING BOX GAP
+    # CONTAINMENT
+    # ========================================================
+
+    @classmethod
+    def containment_ratio(
+        cls,
+        region_a,
+        region_b,
+    ) -> float:
+        """
+        How much of the smaller region is contained inside
+        the larger region.
+        """
+
+        ax1, ay1, ax2, ay2 = cls.bounds(
+            region_a
+        )
+
+        bx1, by1, bx2, by2 = cls.bounds(
+            region_b
+        )
+
+        ix1 = max(
+            ax1,
+            bx1,
+        )
+
+        iy1 = max(
+            ay1,
+            by1,
+        )
+
+        ix2 = min(
+            ax2,
+            bx2,
+        )
+
+        iy2 = min(
+            ay2,
+            by2,
+        )
+
+        iw = max(
+            0,
+            ix2 - ix1,
+        )
+
+        ih = max(
+            0,
+            iy2 - iy1,
+        )
+
+        intersection = iw * ih
+
+        smaller_area = min(
+            cls.area(region_a),
+            cls.area(region_b),
+        )
+
+        if smaller_area <= 0:
+            return 0.0
+
+        return intersection / smaller_area
+
+    # ========================================================
+    # GAP
     # ========================================================
 
     @classmethod
     def calculate_gap(
         cls,
         region_a,
-        region_b
+        region_b,
     ):
 
-        ax1 = int(
-            cls.get_value(
-                region_a,
-                "x"
-            )
+        ax1, ay1, ax2, ay2 = cls.bounds(
+            region_a
         )
 
-        ay1 = int(
-            cls.get_value(
-                region_a,
-                "y"
-            )
-        )
-
-        ax2 = (
-            ax1
-            +
-            int(
-                cls.get_value(
-                    region_a,
-                    "width"
-                )
-            )
-        )
-
-        ay2 = (
-            ay1
-            +
-            int(
-                cls.get_value(
-                    region_a,
-                    "height"
-                )
-            )
-        )
-
-        bx1 = int(
-            cls.get_value(
-                region_b,
-                "x"
-            )
-        )
-
-        by1 = int(
-            cls.get_value(
-                region_b,
-                "y"
-            )
-        )
-
-        bx2 = (
-            bx1
-            +
-            int(
-                cls.get_value(
-                    region_b,
-                    "width"
-                )
-            )
-        )
-
-        by2 = (
-            by1
-            +
-            int(
-                cls.get_value(
-                    region_b,
-                    "height"
-                )
-            )
+        bx1, by1, bx2, by2 = cls.bounds(
+            region_b
         )
 
         horizontal_gap = max(
             0,
             bx1 - ax2,
-            ax1 - bx2
+            ax1 - bx2,
         )
 
         vertical_gap = max(
             0,
             by1 - ay2,
-            ay1 - by2
+            ay1 - by2,
         )
 
         return (
             horizontal_gap,
-            vertical_gap
+            vertical_gap,
         )
 
     # ========================================================
-    # SIZE SIMILARITY
+    # CENTER DISTANCE
+    # ========================================================
+
+    @classmethod
+    def center_distance(
+        cls,
+        region_a,
+        region_b,
+    ):
+
+        ax1, ay1, ax2, ay2 = cls.bounds(
+            region_a
+        )
+
+        bx1, by1, bx2, by2 = cls.bounds(
+            region_b
+        )
+
+        acx = (ax1 + ax2) / 2.0
+        acy = (ay1 + ay2) / 2.0
+
+        bcx = (bx1 + bx2) / 2.0
+        bcy = (by1 + by2) / 2.0
+
+        dx = acx - bcx
+        dy = acy - bcy
+
+        return (
+            dx * dx + dy * dy
+        ) ** 0.5
+
+    # ========================================================
+    # SIZE RATIO
     # ========================================================
 
     @classmethod
     def size_ratio(
         cls,
         region_a,
-        region_b
-    ):
+        region_b,
+    ) -> float:
 
         area_a = max(
             1,
-            cls.area(
-                region_a
-            )
+            cls.area(region_a),
         )
 
         area_b = max(
             1,
-            cls.area(
-                region_b
-            )
+            cls.area(region_b),
+        )
+
+        return (
+            max(area_a, area_b)
+            /
+            min(area_a, area_b)
+        )
+
+    # ========================================================
+    # ASPECT RATIO
+    # ========================================================
+
+    @classmethod
+    def aspect_ratio(
+        cls,
+        region,
+    ) -> float:
+
+        width = max(
+            1,
+            int(
+                cls.get_value(
+                    region,
+                    "width",
+                    1,
+                )
+            ),
+        )
+
+        height = max(
+            1,
+            int(
+                cls.get_value(
+                    region,
+                    "height",
+                    1,
+                )
+            ),
         )
 
         return max(
-            area_a,
-            area_b
-        ) / min(
-            area_a,
-            area_b
+            width / height,
+            height / width,
         )
 
     # ========================================================
@@ -494,7 +516,7 @@ class VisualMerger:
     def should_merge(
         self,
         region_a,
-        region_b
+        region_b,
     ) -> bool:
 
         area_a = self.area(
@@ -506,80 +528,120 @@ class VisualMerger:
         )
 
         if area_a <= 0 or area_b <= 0:
-
             return False
+
+        # ----------------------------------------------------
+        # Strong overlap
+        # ----------------------------------------------------
 
         iou = self.calculate_iou(
             region_a,
-            region_b
+            region_b,
         )
 
-        # ----------------------------------------------------
-        # Rule 1:
-        # Strong overlap always wins.
-        # ----------------------------------------------------
-
         if iou >= self.iou_threshold:
-
             return True
 
         # ----------------------------------------------------
-        # Rule 2:
-        # Nearby regions must have similar scale.
+        # Containment
+        #
+        # Example:
+        #
+        # large contour
+        #     ┌───────────────┐
+        #     │   ┌───────┐   │
+        #     │   │small  │   │
+        #     │   └───────┘   │
+        #     └───────────────┘
+        #
+        # These should be one logical region.
         # ----------------------------------------------------
 
-        ratio = self.size_ratio(
+        containment = self.containment_ratio(
             region_a,
-            region_b
+            region_b,
         )
 
-        if (
-            ratio
-            >
-            self.max_size_ratio
-        ):
-
-            return False
+        if containment >= self.containment_threshold:
+            return True
 
         # ----------------------------------------------------
-        # Rule 3:
-        # Small gap.
+        # Gap
         # ----------------------------------------------------
 
         horizontal_gap, vertical_gap = (
             self.calculate_gap(
                 region_a,
-                region_b
+                region_b,
             )
         )
 
-        if (
-            horizontal_gap
-            <= self.proximity_threshold
-            and
-            vertical_gap
-            <= self.proximity_threshold
-        ):
+        ratio = self.size_ratio(
+            region_a,
+            region_b,
+        )
 
+        # ----------------------------------------------------
+        # Do not merge extremely different objects merely
+        # because they are close.
+        # ----------------------------------------------------
+
+        if ratio > self.max_size_ratio:
+            return False
+
+        # ----------------------------------------------------
+        # Directly touching / almost touching.
+        # ----------------------------------------------------
+
+        if (
+            horizontal_gap <= self.proximity_threshold
+            and
+            vertical_gap <= self.proximity_threshold
+        ):
             return True
 
         # ----------------------------------------------------
-        # Rule 4:
-        # Slightly larger gap is allowed only
-        # when the regions are very similar in size.
+        # Slightly larger gap.
+        #
+        # Only allow this when:
+        #
+        # - objects have reasonably similar size
+        # - one dimension is aligned
         # ----------------------------------------------------
 
         if (
-            horizontal_gap
-            <= self.max_gap
+            horizontal_gap <= self.max_gap
             and
-            vertical_gap
-            <= self.max_gap
+            vertical_gap <= self.max_gap
             and
-            ratio
-            <= 2.0
+            ratio <= 4.0
         ):
+            return True
 
+        # ----------------------------------------------------
+        # Same horizontal line.
+        # ----------------------------------------------------
+
+        if (
+            horizontal_gap <= self.max_gap
+            and
+            vertical_gap <= 12
+            and
+            ratio <= 8.0
+        ):
+            return True
+
+        # ----------------------------------------------------
+        # Same vertical line.
+        # ----------------------------------------------------
+
+        if (
+            vertical_gap <= self.max_gap
+            and
+            horizontal_gap <= 12
+            and
+            ratio <= 8.0
+        ):
             return True
 
         return False
@@ -592,130 +654,180 @@ class VisualMerger:
     def merge_bbox(
         cls,
         region_a,
-        region_b
+        region_b,
     ):
 
-        ax1 = int(
-            cls.get_value(
-                region_a,
-                "x"
-            )
+        ax1, ay1, ax2, ay2 = cls.bounds(
+            region_a
         )
 
-        ay1 = int(
-            cls.get_value(
-                region_a,
-                "y"
-            )
-        )
-
-        ax2 = (
-            ax1
-            +
-            int(
-                cls.get_value(
-                    region_a,
-                    "width"
-                )
-            )
-        )
-
-        ay2 = (
-            ay1
-            +
-            int(
-                cls.get_value(
-                    region_a,
-                    "height"
-                )
-            )
-        )
-
-        bx1 = int(
-            cls.get_value(
-                region_b,
-                "x"
-            )
-        )
-
-        by1 = int(
-            cls.get_value(
-                region_b,
-                "y"
-            )
-        )
-
-        bx2 = (
-            bx1
-            +
-            int(
-                cls.get_value(
-                    region_b,
-                    "width"
-                )
-            )
-        )
-
-        by2 = (
-            by1
-            +
-            int(
-                cls.get_value(
-                    region_b,
-                    "height"
-                )
-            )
+        bx1, by1, bx2, by2 = cls.bounds(
+            region_b
         )
 
         return {
-
             "x": min(
                 ax1,
-                bx1
+                bx1,
             ),
-
             "y": min(
                 ay1,
-                by1
+                by1,
             ),
-
             "x2": max(
                 ax2,
-                bx2
+                bx2,
             ),
-
             "y2": max(
                 ay2,
-                by2
+                by2,
             ),
         }
 
     # ========================================================
-    # UNION-FIND
+    # UNION FIND
     # ========================================================
 
     @staticmethod
     def find(
         parent,
-        value
+        value,
     ):
 
-        while (
-            parent[value]
-            != value
-        ):
+        while parent[value] != value:
 
-            parent[value] = (
-                parent[
-                    parent[value]
-                ]
-            )
-
-            value = parent[
-                value
+            parent[value] = parent[
+                parent[value]
             ]
 
+            value = parent[value]
+
         return value
+
+    # ========================================================
+    # UNION
+    # ========================================================
+
+    @staticmethod
+    def union(
+        parent,
+        rank,
+        a,
+        b,
+    ):
+
+        root_a = VisualMerger.find(
+            parent,
+            a,
+        )
+
+        root_b = VisualMerger.find(
+            parent,
+            b,
+        )
+
+        if root_a == root_b:
+            return
+
+        if rank[root_a] < rank[root_b]:
+
+            parent[root_a] = root_b
+
+        elif rank[root_a] > rank[root_b]:
+
+            parent[root_b] = root_a
+
+        else:
+
+            parent[root_b] = root_a
+            rank[root_a] += 1
+
+    # ========================================================
+    # GROUP BBOX
+    # ========================================================
+
+    @classmethod
+    def group_bbox(
+        cls,
+        group,
+    ):
+
+        x1 = min(
+            region["x"]
+            for region in group
+        )
+
+        y1 = min(
+            region["y"]
+            for region in group
+        )
+
+        x2 = max(
+            region["x"]
+            + region["width"]
+            for region in group
+        )
+
+        y2 = max(
+            region["y"]
+            + region["height"]
+            for region in group
+        )
+
+        return (
+            x1,
+            y1,
+            x2,
+            y2,
+        )
+
+    # ========================================================
+    # GROUP AREA
+    # ========================================================
+
+    @classmethod
+    def group_bbox_area(
+        cls,
+        group,
+    ):
+
+        x1, y1, x2, y2 = cls.group_bbox(
+            group
+        )
+
+        return (
+            max(0, x2 - x1)
+            *
+            max(0, y2 - y1)
+        )
+
+    # ========================================================
+    # PROTECT GIANT GROUPS
+    # ========================================================
+
+    def group_is_reasonable(
+        self,
+        group,
+    ) -> bool:
+
+        if not group:
+            return True
+
+        x1, y1, x2, y2 = (
+            self.group_bbox(group)
+        )
+
+        width = x2 - x1
+        height = y2 - y1
+
+        if (
+            width > self.max_merged_width
+            or
+            height > self.max_merged_height
+        ):
+            return False
+
+        return True
 
     # ========================================================
     # MERGE
@@ -723,48 +835,57 @@ class VisualMerger:
 
     def merge(
         self,
-        regions
+        regions,
     ) -> List[MergedVisualRegion]:
 
         if not regions:
-
             return []
 
         data = [
-
             self.region_to_dict(
                 region
             )
-
             for region in regions
-
         ]
 
         # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # Sort by area descending.
-        #
-        # Large regions are protected from absorbing
-        # unrelated small regions.
+        # Remove invalid regions
+        # ----------------------------------------------------
+
+        data = [
+            region
+            for region in data
+            if (
+                int(region.get("width", 0)) > 0
+                and
+                int(region.get("height", 0)) > 0
+            )
+        ]
+
+        if not data:
+            return []
+
+        # ----------------------------------------------------
+        # Sort by area.
         # ----------------------------------------------------
 
         data.sort(
             key=lambda region:
-                self.area(
-                    region
-                ),
-            reverse=True
+                self.area(region),
+            reverse=True,
         )
 
         parent = list(
-            range(
-                len(data)
-            )
+            range(len(data))
         )
 
+        rank = [
+            0
+            for _ in data
+        ]
+
         # ----------------------------------------------------
-        # Pairwise grouping
+        # Pairwise grouping.
         # ----------------------------------------------------
 
         for i in range(
@@ -773,32 +894,87 @@ class VisualMerger:
 
             for j in range(
                 i + 1,
-                len(data)
+                len(data),
             ):
 
-                if self.should_merge(
-                    data[i],
-                    data[j]
+                region_a = data[i]
+                region_b = data[j]
+
+                if not self.should_merge(
+                    region_a,
+                    region_b,
+                ):
+                    continue
+
+                # ------------------------------------------------
+                # Prevent a large contour from swallowing another
+                # distant object.
+                # ------------------------------------------------
+
+                current_root_a = self.find(
+                    parent,
+                    i,
+                )
+
+                current_root_b = self.find(
+                    parent,
+                    j,
+                )
+
+                if current_root_a == current_root_b:
+                    continue
+
+                # ------------------------------------------------
+                # Simulate resulting group.
+                # ------------------------------------------------
+
+                group_a = [
+                    data[index]
+                    for index in range(
+                        len(data)
+                    )
+                    if self.find(
+                        parent,
+                        index,
+                    ) == current_root_a
+                ]
+
+                group_b = [
+                    data[index]
+                    for index in range(
+                        len(data)
+                    )
+                    if self.find(
+                        parent,
+                        index,
+                    ) == current_root_b
+                ]
+
+                combined = (
+                    group_a
+                    +
+                    group_b
+                )
+
+                # ------------------------------------------------
+                # Don't allow enormous accidental page groups.
+                # ------------------------------------------------
+
+                if not self.group_is_reasonable(
+                    combined
                 ):
 
-                    root_i = self.find(
-                        parent,
-                        i
-                    )
+                    continue
 
-                    root_j = self.find(
-                        parent,
-                        j
-                    )
-
-                    if root_i != root_j:
-
-                        parent[root_j] = (
-                            root_i
-                        )
+                self.union(
+                    parent,
+                    rank,
+                    i,
+                    j,
+                )
 
         # ----------------------------------------------------
-        # Build groups
+        # Build groups.
         # ----------------------------------------------------
 
         groups = {}
@@ -809,116 +985,87 @@ class VisualMerger:
 
             root = self.find(
                 parent,
-                index
+                index,
             )
 
             groups.setdefault(
                 root,
-                []
+                [],
             ).append(
                 data[index]
             )
 
         # ----------------------------------------------------
-        # Build merged regions
+        # Build merged regions.
         # ----------------------------------------------------
 
         merged = []
 
         for group in groups.values():
 
-            x1 = min(
-                region["x"]
-                for region in group
+            x1, y1, x2, y2 = (
+                self.group_bbox(
+                    group
+                )
             )
 
-            y1 = min(
-                region["y"]
-                for region in group
-            )
-
-            x2 = max(
-                region["x"]
-                +
-                region["width"]
-                for region in group
-            )
-
-            y2 = max(
-                region["y"]
-                +
-                region["height"]
-                for region in group
-            )
+            # ------------------------------------------------
+            # Padding.
+            # ------------------------------------------------
 
             x1 = max(
                 0,
-                x1 - self.padding
+                x1 - self.padding,
             )
 
             y1 = max(
                 0,
-                y1 - self.padding
+                y1 - self.padding,
             )
 
             x2 += self.padding
-
             y2 += self.padding
 
-            width = (
-                x2 - x1
-            )
-
-            height = (
-                y2 - y1
-            )
+            width = x2 - x1
+            height = y2 - y1
 
             merged.append(
-
                 MergedVisualRegion(
-
                     region_id=0,
-
                     x=x1,
-
                     y=y1,
-
                     width=width,
-
                     height=height,
-
                     area=(
                         width
-                        * height
+                        *
+                        height
                     ),
-
                     component_count=len(
                         group
                     ),
-
                     source_regions=group,
-
                 )
             )
 
         # ----------------------------------------------------
-        # Sort spatially
+        # Spatial sorting.
         # ----------------------------------------------------
 
         merged.sort(
             key=lambda region: (
                 region.y,
-                region.x
+                region.x,
             )
         )
 
         # ----------------------------------------------------
-        # Assign IDs
+        # Assign IDs.
         # ----------------------------------------------------
 
         for index, region in enumerate(
             merged,
-            start=1
+            start=1,
         ):
 
             region.region_id = index

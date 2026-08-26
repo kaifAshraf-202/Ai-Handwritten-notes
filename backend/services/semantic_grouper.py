@@ -8,6 +8,21 @@ from typing import List, Dict, Any
 
 @dataclass
 class SemanticRegion:
+    """
+    Represents a semantic region extracted from a page.
+
+    A semantic region is the higher-level interpretation of
+    a visual region, for example:
+
+        - text
+        - heading
+        - handwriting
+        - highlight
+        - diagram
+        - graphic
+        - annotation
+        - visual
+    """
 
     region_id: int
 
@@ -31,7 +46,6 @@ class SemanticRegion:
     metadata: Dict[str, Any] = None
 
     def to_dict(self):
-
         data = asdict(self)
 
         if data["metadata"] is None:
@@ -41,7 +55,6 @@ class SemanticRegion:
 
     @property
     def bbox(self):
-
         return (
             self.x,
             self.y,
@@ -55,37 +68,31 @@ class SemanticRegion:
 # ============================================================
 
 class SemanticGrouper:
-
     """
-    Convert broad visual regions into smaller semantic
-    content regions.
+    Convert merged visual regions into semantic content regions.
 
     Important principle:
 
         Spatial proximity alone is NOT enough.
 
-    We use:
+    The grouper uses:
 
         1. OCR overlap
-        2. colour information
-        3. visual region size
-        4. spatial position
-        5. visual classification
-        6. handwriting/highlight information
+        2. visual region information
+        3. spatial information
+        4. visual classification
+        5. handwriting information
+        6. highlight information
+        7. diagram information
     """
 
     def __init__(
         self,
-
-        text_overlap_threshold=0.25,
-
-        containment_threshold=0.70,
-
-        min_visual_width=25,
-
-        min_visual_height=20,
-
-        padding=8,
+        text_overlap_threshold: float = 0.25,
+        containment_threshold: float = 0.70,
+        min_visual_width: int = 25,
+        min_visual_height: int = 20,
+        padding: int = 8,
     ):
 
         self.text_overlap_threshold = (
@@ -114,20 +121,24 @@ class SemanticGrouper:
     def get_value(
         obj,
         key,
-        default=None
+        default=None,
     ):
+        """
+        Safely read a value from either a dictionary
+        or an object.
+        """
 
         if isinstance(obj, dict):
 
             return obj.get(
                 key,
-                default
+                default,
             )
 
         return getattr(
             obj,
             key,
-            default
+            default,
         )
 
     # ========================================================
@@ -137,14 +148,14 @@ class SemanticGrouper:
     @classmethod
     def area(
         cls,
-        region
+        region,
     ):
 
         width = int(
             cls.get_value(
                 region,
                 "width",
-                0
+                0,
             )
         )
 
@@ -152,7 +163,7 @@ class SemanticGrouper:
             cls.get_value(
                 region,
                 "height",
-                0
+                0,
             )
         )
 
@@ -165,14 +176,14 @@ class SemanticGrouper:
     @classmethod
     def bbox(
         cls,
-        region
+        region,
     ):
 
         x = int(
             cls.get_value(
                 region,
                 "x",
-                0
+                0,
             )
         )
 
@@ -180,7 +191,7 @@ class SemanticGrouper:
             cls.get_value(
                 region,
                 "y",
-                0
+                0,
             )
         )
 
@@ -188,7 +199,7 @@ class SemanticGrouper:
             cls.get_value(
                 region,
                 "width",
-                0
+                0,
             )
         )
 
@@ -196,7 +207,7 @@ class SemanticGrouper:
             cls.get_value(
                 region,
                 "height",
-                0
+                0,
             )
         )
 
@@ -204,7 +215,7 @@ class SemanticGrouper:
             x,
             y,
             x + width,
-            y + height
+            y + height,
         )
 
     # ========================================================
@@ -215,7 +226,7 @@ class SemanticGrouper:
     def intersection_area(
         cls,
         region_a,
-        region_b
+        region_b,
     ):
 
         ax1, ay1, ax2, ay2 = cls.bbox(
@@ -228,32 +239,32 @@ class SemanticGrouper:
 
         x1 = max(
             ax1,
-            bx1
+            bx1,
         )
 
         y1 = max(
             ay1,
-            by1
+            by1,
         )
 
         x2 = min(
             ax2,
-            bx2
+            bx2,
         )
 
         y2 = min(
             ay2,
-            by2
+            by2,
         )
 
         width = max(
             0,
-            x2 - x1
+            x2 - x1,
         )
 
         height = max(
             0,
-            y2 - y1
+            y2 - y1,
         )
 
         return width * height
@@ -266,13 +277,13 @@ class SemanticGrouper:
     def iou(
         cls,
         region_a,
-        region_b
+        region_b,
     ):
 
         intersection = (
             cls.intersection_area(
                 region_a,
-                region_b
+                region_b,
             )
         )
 
@@ -286,10 +297,8 @@ class SemanticGrouper:
 
         union = (
             area_a
-            +
-            area_b
-            -
-            intersection
+            + area_b
+            - intersection
         )
 
         if union <= 0:
@@ -308,13 +317,13 @@ class SemanticGrouper:
     def overlap_ratio(
         cls,
         visual_region,
-        text_region
+        text_region,
     ):
 
         intersection = (
             cls.intersection_area(
                 visual_region,
-                text_region
+                text_region,
             )
         )
 
@@ -338,7 +347,7 @@ class SemanticGrouper:
     def contains(
         cls,
         outer,
-        inner
+        inner,
     ):
 
         ox1, oy1, ox2, oy2 = cls.bbox(
@@ -360,17 +369,17 @@ class SemanticGrouper:
         )
 
     # ========================================================
-    # CONVERT
+    # CONVERT REGION TO DICT
     # ========================================================
 
     @staticmethod
     def to_dict(
-        region
+        region,
     ):
 
         if isinstance(
             region,
-            dict
+            dict,
         ):
 
             return dict(
@@ -379,68 +388,59 @@ class SemanticGrouper:
 
         if hasattr(
             region,
-            "to_dict"
+            "to_dict",
         ):
 
             return region.to_dict()
 
         return {
+            "region_id": getattr(
+                region,
+                "region_id",
+                0,
+            ),
 
-            "region_id":
-                getattr(
-                    region,
-                    "region_id",
-                    0
-                ),
+            "region_type": getattr(
+                region,
+                "region_type",
+                "unknown",
+            ),
 
-            "region_type":
-                getattr(
-                    region,
-                    "region_type",
-                    "unknown"
-                ),
+            "x": getattr(
+                region,
+                "x",
+                0,
+            ),
 
-            "x":
-                getattr(
-                    region,
-                    "x",
-                    0
-                ),
+            "y": getattr(
+                region,
+                "y",
+                0,
+            ),
 
-            "y":
-                getattr(
-                    region,
-                    "y",
-                    0
-                ),
+            "width": getattr(
+                region,
+                "width",
+                0,
+            ),
 
-            "width":
-                getattr(
-                    region,
-                    "width",
-                    0
-                ),
+            "height": getattr(
+                region,
+                "height",
+                0,
+            ),
 
-            "height":
-                getattr(
-                    region,
-                    "height",
-                    0
-                ),
+            "confidence": getattr(
+                region,
+                "confidence",
+                0.0,
+            ),
 
-            "confidence":
-                getattr(
-                    region,
-                    "confidence",
-                    0.0
-                ),
-
-            "source":
-                getattr(
-                    region,
-                    "source",
-                    "unknown"
-                ),
+            "source": getattr(
+                region,
+                "source",
+                "unknown",
+            ),
         }
 
     # ========================================================
@@ -450,7 +450,7 @@ class SemanticGrouper:
     def collect_text(
         self,
         region,
-        ocr_words
+        ocr_words,
     ):
 
         selected = []
@@ -460,7 +460,7 @@ class SemanticGrouper:
             overlap = (
                 self.overlap_ratio(
                     region,
-                    word
+                    word,
                 )
             )
 
@@ -474,7 +474,7 @@ class SemanticGrouper:
                     self.get_value(
                         word,
                         "text",
-                        ""
+                        "",
                     )
                 ).strip()
 
@@ -492,7 +492,7 @@ class SemanticGrouper:
 
     def classify_text(
         self,
-        text_words
+        text_words,
     ):
 
         if not text_words:
@@ -507,9 +507,9 @@ class SemanticGrouper:
 
             return "visual"
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Heading-like text
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         if (
             len(text) <= 60
@@ -518,20 +518,20 @@ class SemanticGrouper:
 
             return "heading"
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Normal text
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         return "text"
 
     # ========================================================
-    # VISUAL TYPE
+    # VISUAL TYPE FALLBACK
     # ========================================================
 
     def classify_visual(
         self,
         region,
-        ocr_words
+        ocr_words,
     ):
 
         region_dict = (
@@ -543,13 +543,13 @@ class SemanticGrouper:
         region_type = str(
             region_dict.get(
                 "region_type",
-                ""
+                "",
             )
         ).lower()
 
-        # ------------------------------------------------
+        # ----------------------------------------------------
         # Existing semantic classification
-        # ------------------------------------------------
+        # ----------------------------------------------------
 
         if region_type in {
             "handwriting",
@@ -561,14 +561,14 @@ class SemanticGrouper:
 
             return region_type
 
-        # ------------------------------------------------
+        # ----------------------------------------------------
         # Collect OCR
-        # ------------------------------------------------
+        # ----------------------------------------------------
 
         text_words = (
             self.collect_text(
                 region,
-                ocr_words
+                ocr_words,
             )
         )
 
@@ -581,6 +581,165 @@ class SemanticGrouper:
         return "visual"
 
     # ========================================================
+    # EXTRACT CLASSIFIER REGION ID
+    # ========================================================
+
+    def get_classification_region_id(
+        self,
+        classification,
+    ):
+        """
+        Extract the region ID from a VisualClassification.
+
+        Supports several possible representations so the
+        semantic grouper remains compatible with the classifier.
+        """
+
+        region_id = self.get_value(
+            classification,
+            "region_id",
+            None,
+        )
+
+        if region_id is not None:
+
+            try:
+                return int(
+                    region_id
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                pass
+
+        region = self.get_value(
+            classification,
+            "region",
+            None,
+        )
+
+        if region is not None:
+
+            region_id = self.get_value(
+                region,
+                "region_id",
+                None,
+            )
+
+            if region_id is not None:
+
+                try:
+                    return int(
+                        region_id
+                    )
+                except (
+                    TypeError,
+                    ValueError,
+                ):
+                    pass
+
+        return 0
+
+    # ========================================================
+    # EXTRACT CLASSIFIER TYPE
+    # ========================================================
+
+    def get_classification_type(
+        self,
+        classification,
+    ):
+        """
+        Extract semantic type from VisualClassification.
+
+        Current classifier terminology includes:
+
+            handwriting
+            highlight
+            diagram
+            graphic
+        """
+
+        possible_keys = (
+            "classification",
+            "region_type",
+            "label",
+            "type",
+        )
+
+        for key in possible_keys:
+
+            value = self.get_value(
+                classification,
+                key,
+                None,
+            )
+
+            if value is None:
+                continue
+
+            value = str(
+                value
+            ).strip().lower()
+
+            if value:
+
+                return value
+
+        return ""
+
+    # ========================================================
+    # EXTRACT CLASSIFIER CONFIDENCE
+    # ========================================================
+
+    def get_classification_confidence(
+        self,
+        classification,
+    ):
+
+        value = self.get_value(
+            classification,
+            "confidence",
+            0.0,
+        )
+
+        try:
+
+            return float(
+                value
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return 0.0
+
+    # ========================================================
+    # EXTRACT CLASSIFIER REASON
+    # ========================================================
+
+    def get_classification_reason(
+        self,
+        classification,
+    ):
+
+        value = self.get_value(
+            classification,
+            "reason",
+            "",
+        )
+
+        if value is None:
+
+            return ""
+
+        return str(
+            value
+        )
+
+    # ========================================================
     # CREATE SEMANTIC REGION
     # ========================================================
 
@@ -590,7 +749,9 @@ class SemanticGrouper:
         region_type,
         region_id,
         parent_id,
-        text_words=None
+        text_words=None,
+        classifier_confidence=0.0,
+        classifier_reason="",
     ):
 
         data = self.to_dict(
@@ -606,35 +767,37 @@ class SemanticGrouper:
             x=int(
                 data.get(
                     "x",
-                    0
+                    0,
                 )
             ),
 
             y=int(
                 data.get(
                     "y",
-                    0
+                    0,
                 )
             ),
 
             width=int(
                 data.get(
                     "width",
-                    0
+                    0,
                 )
             ),
 
             height=int(
                 data.get(
                     "height",
-                    0
+                    0,
                 )
             ),
 
             confidence=float(
-                data.get(
+                classifier_confidence
+                if classifier_confidence > 0
+                else data.get(
                     "confidence",
-                    0.0
+                    0.0,
                 )
             ),
 
@@ -647,16 +810,28 @@ class SemanticGrouper:
             visual_overlap=1.0,
 
             metadata={
+
                 "text": (
                     " ".join(
                         text_words or []
                     )
                 ),
+
+                "text_words": (
+                    text_words or []
+                ),
+
                 "original_source":
                     data.get(
                         "source",
-                        "unknown"
+                        "unknown",
                     ),
+
+                "classifier_confidence":
+                    classifier_confidence,
+
+                "classifier_reason":
+                    classifier_reason,
             },
         )
 
@@ -667,70 +842,150 @@ class SemanticGrouper:
     def group_visual_regions(
         self,
         visual_regions,
-        ocr_words
+        ocr_words,
+        classifications=None,
     ):
+        """
+        Convert merged visual regions into semantic regions.
+
+        `classifications` should contain the output of:
+
+            VisualCandidateClassifier.classify(
+                image,
+                visual_regions,
+                ocr_words
+            )
+
+        If classifications are not provided, the method falls
+        back to OCR/text-based classification.
+        """
 
         semantic_regions = []
 
         next_id = 1
 
+        # ----------------------------------------------------
+        # Build classification lookup
+        # ----------------------------------------------------
+
+        classification_map = {}
+
+        if classifications:
+
+            for classification in classifications:
+
+                parent_id = (
+                    self.get_classification_region_id(
+                        classification
+                    )
+                )
+
+                if parent_id != 0:
+
+                    classification_map[
+                        parent_id
+                    ] = classification
+
+        # ----------------------------------------------------
+        # Process merged visual regions
+        # ----------------------------------------------------
+
         for region in visual_regions:
 
-            region_dict = self.to_dict(
-                region
+            region_dict = (
+                self.to_dict(
+                    region
+                )
+            )
+
+            parent_id = int(
+                region_dict.get(
+                    "region_id",
+                    0,
+                )
             )
 
             width = int(
                 region_dict.get(
                     "width",
-                    0
+                    0,
                 )
             )
 
             height = int(
                 region_dict.get(
                     "height",
-                    0
+                    0,
                 )
             )
 
-            if (
-                width
-                <
-                self.min_visual_width
-            ):
+            if width < self.min_visual_width:
 
                 continue
 
-            if (
-                height
-                <
-                self.min_visual_height
-            ):
+            if height < self.min_visual_height:
 
                 continue
 
             # ------------------------------------------------
-            # OCR inside visual region
+            # OCR inside this region
             # ------------------------------------------------
 
             text_words = (
                 self.collect_text(
                     region,
-                    ocr_words
+                    ocr_words,
                 )
             )
 
             # ------------------------------------------------
-            # Determine semantic type
+            # Get visual classification
             # ------------------------------------------------
 
-            region_type = (
-                self.classify_visual(
-                    region,
-                    ocr_words
+            classification = (
+                classification_map.get(
+                    parent_id
                 )
             )
+
+            semantic_type = ""
+
+            classifier_confidence = 0.0
+
+            classifier_reason = ""
+
+            if classification is not None:
+
+                semantic_type = (
+                    self.get_classification_type(
+                        classification
+                    )
+                )
+
+                classifier_confidence = (
+                    self.get_classification_confidence(
+                        classification
+                    )
+                )
+
+                classifier_reason = (
+                    self.get_classification_reason(
+                        classification
+                    )
+                )
+
+            # ------------------------------------------------
+            # Fallback
+            # ------------------------------------------------
+
+            if not semantic_type:
+
+                semantic_type = (
+                    self.classify_visual(
+                        region,
+                        ocr_words,
+                    )
+                )
 
             # ------------------------------------------------
             # Create semantic region
@@ -739,15 +994,16 @@ class SemanticGrouper:
             semantic_region = (
                 self.create_region(
                     region=region,
-                    region_type=region_type,
+                    region_type=semantic_type,
                     region_id=next_id,
-                    parent_id=int(
-                        region_dict.get(
-                            "region_id",
-                            0
-                        )
+                    parent_id=parent_id,
+                    text_words=text_words,
+                    classifier_confidence=(
+                        classifier_confidence
                     ),
-                    text_words=text_words
+                    classifier_reason=(
+                        classifier_reason
+                    ),
                 )
             )
 
@@ -766,13 +1022,29 @@ class SemanticGrouper:
     def analyze_page(
         self,
         visual_regions,
-        ocr_words
+        ocr_words,
+        classifications=None,
     ):
+        """
+        Analyze a page and return semantic regions.
+
+        Parameters:
+
+            visual_regions:
+                Merged visual regions.
+
+            ocr_words:
+                OCR word dictionaries.
+
+            classifications:
+                Optional VisualClassification objects.
+        """
 
         semantic_regions = (
             self.group_visual_regions(
-                visual_regions,
-                ocr_words
+                visual_regions=visual_regions,
+                ocr_words=ocr_words,
+                classifications=classifications,
             )
         )
 
@@ -787,7 +1059,7 @@ class SemanticGrouper:
             counts[region_type] = (
                 counts.get(
                     region_type,
-                    0
+                    0,
                 )
                 + 1
             )
@@ -796,8 +1068,7 @@ class SemanticGrouper:
 
             "regions": [
                 region.to_dict()
-                for region
-                in semantic_regions
+                for region in semantic_regions
             ],
 
             "counts": counts,
