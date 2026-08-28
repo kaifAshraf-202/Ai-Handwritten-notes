@@ -31,17 +31,14 @@ class LayoutBlock:
     metadata: Dict[str, Any] = None
 
     def __post_init__(self):
-
         if self.metadata is None:
             self.metadata = {}
 
     def to_dict(self) -> Dict[str, Any]:
-
         return asdict(self)
 
     @property
     def bbox(self):
-
         return (
             self.x,
             self.y,
@@ -59,9 +56,7 @@ class LayoutAnalyzer:
     Analyze spatial relationships between already classified
     visual regions.
 
-    IMPORTANT:
-
-    This class does NOT perform:
+    This stage does NOT perform:
 
         OCR
         detection
@@ -71,7 +66,7 @@ class LayoutAnalyzer:
 
     Those stages already exist.
 
-    This stage only determines which regions belong to the
+    This stage determines which regions belong to the
     same logical page-level block.
     """
 
@@ -103,6 +98,10 @@ class LayoutAnalyzer:
         "text_artifact",
     }
 
+    # --------------------------------------------------------
+    # Configuration
+    # --------------------------------------------------------
+
     def __init__(
         self,
         horizontal_gap: int = 70,
@@ -111,6 +110,14 @@ class LayoutAnalyzer:
         overlap_threshold: float = 0.20,
         max_block_area_ratio: float = 0.45,
     ):
+
+        # IMPORTANT:
+        #
+        # These are configuration values.
+        #
+        # Geometry helper methods are deliberately named
+        # calculate_horizontal_gap() and
+        # calculate_vertical_gap() to avoid a naming collision.
 
         self.horizontal_gap = horizontal_gap
         self.vertical_gap = vertical_gap
@@ -144,9 +151,7 @@ class LayoutAnalyzer:
             )
 
             if value:
-                return str(
-                    value
-                ).lower()
+                return str(value).lower()
 
             return "visual"
 
@@ -174,10 +179,7 @@ class LayoutAnalyzer:
         )
 
         if value:
-
-            return str(
-                value
-            ).lower()
+            return str(value).lower()
 
         return "visual"
 
@@ -210,7 +212,7 @@ class LayoutAnalyzer:
 
     @staticmethod
     def get_bbox(
-        region
+        region,
     ) -> Tuple[int, int, int, int]:
 
         if isinstance(region, dict):
@@ -279,15 +281,19 @@ class LayoutAnalyzer:
 
     @staticmethod
     def bbox_area(
-        bbox
+        bbox,
     ) -> int:
 
-        return max(
-            0,
-            bbox[2],
-        ) * max(
-            0,
-            bbox[3],
+        return (
+            max(
+                0,
+                bbox[2],
+            )
+            *
+            max(
+                0,
+                bbox[3],
+            )
         )
 
     # --------------------------------------------------------
@@ -374,9 +380,11 @@ class LayoutAnalyzer:
         )
 
     # --------------------------------------------------------
+    # FIXED METHOD NAME
+    # --------------------------------------------------------
 
     @staticmethod
-    def horizontal_gap(
+    def calculate_horizontal_gap(
         a,
         b,
     ) -> int:
@@ -393,9 +401,11 @@ class LayoutAnalyzer:
         return 0
 
     # --------------------------------------------------------
+    # FIXED METHOD NAME
+    # --------------------------------------------------------
 
     @staticmethod
-    def vertical_gap(
+    def calculate_vertical_gap(
         a,
         b,
     ) -> int:
@@ -493,7 +503,7 @@ class LayoutAnalyzer:
 
     def type_family(
         self,
-        region
+        region,
     ) -> str:
 
         region_type = (
@@ -537,14 +547,11 @@ class LayoutAnalyzer:
             region_b
         )
 
-        # Same family is always eligible.
+        # Same semantic family.
         if family_a == family_b:
             return True
 
-        # ----------------------------------------------------
-        # Diagram + graphic
-        # ----------------------------------------------------
-
+        # Diagram + graphic can form one visual section.
         if {
             family_a,
             family_b,
@@ -554,14 +561,7 @@ class LayoutAnalyzer:
         }:
             return True
 
-        # ----------------------------------------------------
-        # Text + diagram/graphic:
-        #
-        # We intentionally keep these separate.
-        # Text belonging to a diagram can be associated later
-        # by semantic processing.
-        # ----------------------------------------------------
-
+        # Text stays separate from visual regions.
         if (
             family_a == "text"
             or
@@ -569,10 +569,7 @@ class LayoutAnalyzer:
         ):
             return False
 
-        # ----------------------------------------------------
-        # Highlight must remain independent.
-        # ----------------------------------------------------
-
+        # Highlight stays independent.
         if (
             family_a == "highlight"
             or
@@ -580,10 +577,7 @@ class LayoutAnalyzer:
         ):
             return False
 
-        # ----------------------------------------------------
-        # Handwriting must remain independent from diagrams.
-        # ----------------------------------------------------
-
+        # Handwriting stays independent from diagrams.
         if (
             family_a == "handwriting"
             or
@@ -634,14 +628,24 @@ class LayoutAnalyzer:
         ):
             return True
 
-        h_gap = self.horizontal_gap(
-            bbox_a,
-            bbox_b,
+        # ----------------------------------------------------
+        # IMPORTANT FIX:
+        #
+        # Call geometry methods with their new names.
+        # ----------------------------------------------------
+
+        h_gap = (
+            self.calculate_horizontal_gap(
+                bbox_a,
+                bbox_b,
+            )
         )
 
-        v_gap = self.vertical_gap(
-            bbox_a,
-            bbox_b,
+        v_gap = (
+            self.calculate_vertical_gap(
+                bbox_a,
+                bbox_b,
+            )
         )
 
         h_alignment = (
@@ -663,11 +667,9 @@ class LayoutAnalyzer:
         # ----------------------------------------------------
 
         if (
-            h_gap
-            <= self.horizontal_gap
+            h_gap <= self.horizontal_gap
             and
-            h_alignment
-            >= self.alignment_threshold
+            h_alignment >= self.alignment_threshold
         ):
             return True
 
@@ -676,11 +678,9 @@ class LayoutAnalyzer:
         # ----------------------------------------------------
 
         if (
-            v_gap
-            <= self.vertical_gap
+            v_gap <= self.vertical_gap
             and
-            v_alignment
-            >= self.alignment_threshold
+            v_alignment >= self.alignment_threshold
         ):
             return True
 
@@ -697,16 +697,6 @@ class LayoutAnalyzer:
 
         if not regions:
             return []
-
-        # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # We use a graph-like grouping strategy but require
-        # direct semantic compatibility.
-        #
-        # This prevents unrelated region types from forming
-        # giant chain-connected blocks.
-        # ----------------------------------------------------
 
         groups = []
 
@@ -782,6 +772,14 @@ class LayoutAnalyzer:
             )
             for region in group
         ]
+
+        if not boxes:
+            return (
+                0,
+                0,
+                0,
+                0,
+            )
 
         x1 = min(
             box[0]
@@ -859,6 +857,8 @@ class LayoutAnalyzer:
         if not group:
             return 0.0
 
+        # Single region = lower confidence because no
+        # grouping relationship was established.
         if len(group) == 1:
             return 0.80
 
@@ -869,11 +869,9 @@ class LayoutAnalyzer:
             for region in group
         }
 
-        # Same semantic family = strong grouping.
         if len(type_families) == 1:
             base = 0.88
 
-        # Diagram + graphic is still a coherent visual group.
         elif type_families <= {
             "diagram",
             "graphic",
@@ -985,7 +983,8 @@ class LayoutAnalyzer:
             )
 
         # ----------------------------------------------------
-        # Reading order
+        # Reading order:
+        # top-to-bottom, then left-to-right.
         # ----------------------------------------------------
 
         blocks.sort(
@@ -996,7 +995,6 @@ class LayoutAnalyzer:
         )
 
         # Reassign IDs after sorting.
-
         for index, block in enumerate(
             blocks,
             start=1,

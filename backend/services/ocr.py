@@ -2,7 +2,7 @@ from typing import Dict, Any, List
 
 import pytesseract
 
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance
 
 
 # ============================================================
@@ -17,6 +17,17 @@ pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
 
 # ============================================================
+# OCR CONFIGURATION
+# ============================================================
+
+DEFAULT_PSM = 3
+DEFAULT_LANGUAGE = "eng"
+
+# Prevent Tesseract from hanging indefinitely.
+OCR_TIMEOUT = 60
+
+
+# ============================================================
 # IMAGE PREPROCESSING
 # ============================================================
 
@@ -24,32 +35,43 @@ def preprocess_image(
     image: Image.Image
 ) -> Image.Image:
     """
-    Prepare an image for OCR.
+    Prepare image for OCR.
 
-    The original image is not modified.
+    The original image is never modified.
 
     Processing:
-        1. Convert to grayscale
-        2. Improve contrast
-        3. Apply slight sharpening
+        1. Convert to grayscale.
+        2. Improve contrast slightly.
+
+    We intentionally avoid aggressive sharpening because
+    the complete HandNote AI pipeline already performs
+    additional image processing.
     """
 
-    if not isinstance(image, Image.Image):
+    if not isinstance(
+        image,
+        Image.Image
+    ):
         raise TypeError(
             "image must be a PIL.Image.Image"
         )
 
-    # Convert RGB/RGBA/etc. to grayscale.
-    processed = image.convert("L")
+    # --------------------------------------------------------
+    # Convert to grayscale
+    # --------------------------------------------------------
 
-    # Improve contrast.
+    processed = image.convert(
+        "L"
+    )
+
+    # --------------------------------------------------------
+    # Improve contrast
+    # --------------------------------------------------------
+
     processed = ImageEnhance.Contrast(
         processed
-    ).enhance(1.5)
-
-    # Slight sharpening.
-    processed = processed.filter(
-        ImageFilter.SHARPEN
+    ).enhance(
+        1.35
     )
 
     return processed
@@ -63,13 +85,16 @@ def clean_text(
     text: str
 ) -> str:
     """
-    Clean OCR output while preserving
-    useful mathematical and symbolic content.
+    Clean OCR output while preserving useful
+    mathematical and symbolic content.
 
     Empty lines are removed.
     """
 
-    lines = []
+    if not text:
+        return ""
+
+    lines: List[str] = []
 
     for line in text.splitlines():
 
@@ -78,9 +103,89 @@ def clean_text(
         if not line:
             continue
 
-        lines.append(line)
+        lines.append(
+            line
+        )
 
-    return "\n".join(lines)
+    return "\n".join(
+        lines
+    )
+
+
+# ============================================================
+# SAFE VALUE HELPERS
+# ============================================================
+
+def _safe_float(
+    value: Any,
+    default: float = 0.0
+) -> float:
+    """
+    Safely convert a value to float.
+    """
+
+    try:
+
+        return float(
+            value
+        )
+
+    except (
+        ValueError,
+        TypeError
+    ):
+
+        return default
+
+
+def _safe_int(
+    value: Any,
+    default: int = 0
+) -> int:
+    """
+    Safely convert a value to int.
+    """
+
+    try:
+
+        return int(
+            value
+        )
+
+    except (
+        ValueError,
+        TypeError
+    ):
+
+        return default
+
+
+# ============================================================
+# TESSERACT VALIDATION
+# ============================================================
+
+def _validate_tesseract() -> None:
+    """
+    Verify that Tesseract is available.
+    """
+
+    try:
+
+        pytesseract.get_tesseract_version()
+
+    except pytesseract.TesseractNotFoundError as exc:
+
+        raise RuntimeError(
+            "Tesseract OCR executable was not found. "
+            f"Expected location: {TESSERACT_PATH}"
+        ) from exc
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "Unable to start Tesseract OCR. "
+            f"Expected location: {TESSERACT_PATH}"
+        ) from exc
 
 
 # ============================================================
@@ -104,6 +209,7 @@ def extract_text_with_data(
                 {
                     "text": str,
                     "confidence": float,
+
                     "left": int,
                     "top": int,
                     "width": int,
@@ -117,33 +223,19 @@ def extract_text_with_data(
             ],
 
             "word_count": int,
+            "average_confidence": float,
+
+            "psm": int,
+            "language": str,
 
             "image_width": int,
             "image_height": int
         }
-
-    Parameters
-    ----------
-    image:
-        PIL image to process.
-
-    psm:
-        Tesseract Page Segmentation Mode.
-
-        Common values:
-            3  = Fully automatic page segmentation
-            4  = Assume a single column
-            6  = Assume a single uniform block of text
-            11 = Sparse text
-
-    language:
-        Tesseract language code.
-        Default: "eng"
     """
 
-    # --------------------------------------------------------
-    # Validate image
-    # --------------------------------------------------------
+    # ========================================================
+    # VALIDATION
+    # ========================================================
 
     if not isinstance(
         image,
@@ -153,58 +245,97 @@ def extract_text_with_data(
             "image must be a PIL.Image.Image"
         )
 
-    # --------------------------------------------------------
-    # Validate PSM
-    # --------------------------------------------------------
-
     try:
-        psm = int(psm)
+
+        psm = int(
+            psm
+        )
+
     except (
         TypeError,
         ValueError
-    ):
+    ) as exc:
+
         raise ValueError(
             f"Invalid PSM value: {psm}"
+        ) from exc
+
+    if psm < 0 or psm > 13:
+
+        raise ValueError(
+            f"Invalid PSM value: {psm}. "
+            "Expected a value between 0 and 13."
         )
 
-    # --------------------------------------------------------
-    # Preprocess image
-    # --------------------------------------------------------
+    if not language:
+
+        language = DEFAULT_LANGUAGE
+
+    language = str(
+        language
+    )
+
+    # ========================================================
+    # PREPROCESS IMAGE
+    # ========================================================
 
     processed_image = preprocess_image(
         image
     )
 
-    # --------------------------------------------------------
-    # Tesseract configuration
-    # --------------------------------------------------------
+    # ========================================================
+    # TESSERACT CONFIGURATION
+    # ========================================================
 
     config = (
         f"--oem 3 --psm {psm}"
     )
 
-    # --------------------------------------------------------
-    # Run Tesseract
-    # --------------------------------------------------------
+    # ========================================================
+    # RUN TESSERACT
+    # ========================================================
 
-    data = pytesseract.image_to_data(
-        processed_image,
-        lang=language,
-        config=config,
-        output_type=pytesseract.Output.DICT
-    )
+    try:
+
+        data = pytesseract.image_to_data(
+            processed_image,
+            lang=language,
+            config=config,
+            output_type=pytesseract.Output.DICT,
+            timeout=OCR_TIMEOUT
+        )
+
+    except RuntimeError as exc:
+
+        raise RuntimeError(
+            "Tesseract OCR timed out or failed. "
+            f"Timeout: {OCR_TIMEOUT} seconds. "
+            f"Image size: "
+            f"{image.width}x{image.height}. "
+            f"PSM: {psm}. "
+            f"Language: {language}."
+        ) from exc
+
+    except pytesseract.TesseractNotFoundError as exc:
+
+        raise RuntimeError(
+            "Tesseract executable was not found. "
+            f"Expected: {TESSERACT_PATH}"
+        ) from exc
 
     # ========================================================
-    # EXTRACT OCR WORDS
+    # EXTRACT WORDS
     # ========================================================
 
     words: List[Dict[str, Any]] = []
 
+    text_data = data.get(
+        "text",
+        []
+    )
+
     total_items = len(
-        data.get(
-            "text",
-            []
-        )
+        text_data
     )
 
     for index in range(
@@ -212,121 +343,147 @@ def extract_text_with_data(
     ):
 
         # ----------------------------------------------------
-        # OCR text
+        # TEXT
         # ----------------------------------------------------
 
         text = str(
-            data["text"][index]
+            text_data[index]
         ).strip()
 
-        # Ignore empty OCR entries.
         if not text:
             continue
 
         # ----------------------------------------------------
-        # Confidence
+        # CONFIDENCE
         # ----------------------------------------------------
 
-        try:
+        confidence_data = data.get(
+            "conf",
+            []
+        )
 
-            confidence = float(
-                data["conf"][index]
+        confidence = _safe_float(
+            confidence_data[index]
+            if index < len(
+                confidence_data
             )
-
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            confidence = 0.0
+            else 0.0
+        )
 
         # ----------------------------------------------------
-        # Coordinates
+        # COORDINATES
         # ----------------------------------------------------
 
-        try:
+        left_data = data.get(
+            "left",
+            []
+        )
 
-            left = int(
-                data["left"][index]
+        top_data = data.get(
+            "top",
+            []
+        )
+
+        width_data = data.get(
+            "width",
+            []
+        )
+
+        height_data = data.get(
+            "height",
+            []
+        )
+
+        left = _safe_int(
+            left_data[index]
+            if index < len(
+                left_data
             )
+            else 0
+        )
 
-            top = int(
-                data["top"][index]
+        top = _safe_int(
+            top_data[index]
+            if index < len(
+                top_data
             )
+            else 0
+        )
 
-            width = int(
-                data["width"][index]
+        width = _safe_int(
+            width_data[index]
+            if index < len(
+                width_data
             )
+            else 0
+        )
 
-            height = int(
-                data["height"][index]
+        height = _safe_int(
+            height_data[index]
+            if index < len(
+                height_data
             )
-
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            continue
+            else 0
+        )
 
         # ----------------------------------------------------
-        # Tesseract hierarchy
+        # TESSERACT HIERARCHY
         # ----------------------------------------------------
 
-        try:
+        block_data = data.get(
+            "block_num",
+            []
+        )
 
-            block_num = int(
-                data["block_num"][index]
+        paragraph_data = data.get(
+            "par_num",
+            []
+        )
+
+        line_data = data.get(
+            "line_num",
+            []
+        )
+
+        word_data = data.get(
+            "word_num",
+            []
+        )
+
+        block_num = _safe_int(
+            block_data[index]
+            if index < len(
+                block_data
             )
+            else 0
+        )
 
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            block_num = 0
-
-        try:
-
-            paragraph_num = int(
-                data["par_num"][index]
+        paragraph_num = _safe_int(
+            paragraph_data[index]
+            if index < len(
+                paragraph_data
             )
+            else 0
+        )
 
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            paragraph_num = 0
-
-        try:
-
-            line_num = int(
-                data["line_num"][index]
+        line_num = _safe_int(
+            line_data[index]
+            if index < len(
+                line_data
             )
+            else 0
+        )
 
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            line_num = 0
-
-        try:
-
-            word_num = int(
-                data["word_num"][index]
+        word_num = _safe_int(
+            word_data[index]
+            if index < len(
+                word_data
             )
-
-        except (
-            ValueError,
-            TypeError
-        ):
-
-            word_num = 0
+            else 0
+        )
 
         # ----------------------------------------------------
-        # Store OCR word
+        # STORE WORD
         # ----------------------------------------------------
 
         words.append(
@@ -348,7 +505,7 @@ def extract_text_with_data(
         )
 
     # ========================================================
-    # BUILD COMPLETE OCR TEXT
+    # BUILD COMPLETE TEXT
     # ========================================================
 
     text_lines: List[str] = []
@@ -366,7 +523,7 @@ def extract_text_with_data(
         )
 
         # ----------------------------------------------------
-        # New line detected
+        # New OCR line
         # ----------------------------------------------------
 
         if (
@@ -391,7 +548,7 @@ def extract_text_with_data(
         )
 
     # ========================================================
-    # ADD LAST LINE
+    # LAST LINE
     # ========================================================
 
     if current_line_words:
@@ -403,7 +560,7 @@ def extract_text_with_data(
         )
 
     # ========================================================
-    # COMPLETE OCR TEXT
+    # COMPLETE TEXT
     # ========================================================
 
     full_text = "\n".join(
@@ -415,17 +572,59 @@ def extract_text_with_data(
     )
 
     # ========================================================
-    # RETURN OCR RESULT
+    # OCR STATISTICS
+    # ========================================================
+
+    word_count = len(
+        words
+    )
+
+    if word_count > 0:
+
+        average_confidence = (
+            sum(
+                word["confidence"]
+                for word in words
+            )
+            / word_count
+        )
+
+    else:
+
+        average_confidence = 0.0
+
+    # ========================================================
+    # RETURN RESULT
     # ========================================================
 
     return {
+        # ----------------------------------------------------
+        # OCR CONTENT
+        # ----------------------------------------------------
+
         "text": cleaned_text,
 
         "words": words,
 
-        "word_count": len(
-            words
-        ),
+        # ----------------------------------------------------
+        # OCR STATISTICS
+        # ----------------------------------------------------
+
+        "word_count": word_count,
+
+        "average_confidence": average_confidence,
+
+        # ----------------------------------------------------
+        # OCR CONFIGURATION
+        # ----------------------------------------------------
+
+        "psm": psm,
+
+        "language": language,
+
+        # ----------------------------------------------------
+        # IMAGE INFORMATION
+        # ----------------------------------------------------
 
         "image_width": image.width,
 
@@ -444,15 +643,12 @@ def extract_text(
     """
     Simple OCR API.
 
-    Returns only the extracted text.
-
-    Existing project modules use this function,
-    so its interface remains unchanged.
+    Returns only extracted OCR text.
     """
 
     result = extract_text_with_data(
         image=image,
-        psm=3,
+        psm=DEFAULT_PSM,
         language=language
     )
 
@@ -469,25 +665,19 @@ def extract_ocr_data(
     language: str = "eng"
 ) -> Dict[str, Any]:
     """
-    Backward-compatible OCR API.
+    Backward-compatible OCR data API.
 
-    IMPORTANT:
-    This function returns the COMPLETE OCR RESULT,
-    not just the words list.
+    Returns the complete OCR result dictionary.
 
-    Therefore this works:
-
-        result = extract_ocr_data(image)
-
-        words = result["words"]
-
-    It also supports:
+    Example:
 
         result = extract_ocr_data(
             image=image,
             psm=3,
             language="eng"
         )
+
+        words = result["words"]
     """
 
     return extract_text_with_data(
