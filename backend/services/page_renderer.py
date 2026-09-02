@@ -93,6 +93,8 @@ class PageRenderer:
     4. Fall back to OCR text rendering only when source pixels
        cannot be used.
     5. Keep compatibility with the existing PageRenderer API.
+    6. Prefer exact source-pixel copying over alpha blending for
+       maximum visual fidelity.
     """
 
     def __init__(
@@ -109,6 +111,8 @@ class PageRenderer:
         preserve_diagrams: bool = True,
         preserve_source_text: bool = True,
         debug: bool = False,
+        exact_source_pixels: bool = True,
+        source_pixel_threshold: int = 2,
     ):
         self.background = background
         self.foreground_threshold = max(1, int(foreground_threshold))
@@ -129,6 +133,13 @@ class PageRenderer:
 
         # Existing tests pass debug=False.
         self.debug = bool(debug)
+
+        # V3 fidelity mode: when the source and output use the same
+        # background, copy source RGB pixels directly instead of
+        # alpha-blending them. This preserves anti-aliasing, stroke
+        # thickness and the original colors exactly.
+        self.exact_source_pixels = bool(exact_source_pixels)
+        self.source_pixel_threshold = max(0, int(source_pixel_threshold))
 
         self._font_cache: Dict[int, ImageFont.FreeTypeFont] = {}
 
@@ -331,14 +342,30 @@ class PageRenderer:
             background_rgb,
         )
 
-        alpha_image = Image.fromarray(
-            alpha,
-            mode="L",
-        )
-
-        alpha_image = alpha_image.filter(
-            ImageFilter.GaussianBlur(radius=0.20)
-        )
+        if self.exact_source_pixels:
+            # IMPORTANT: do not blur or resample the source pixels.
+            # The source RGB values already contain their own
+            # anti-aliasing against the source background. If we put
+            # those exact pixels on the same reconstructed background,
+            # we reproduce the source edges without introducing a
+            # second round of alpha blending.
+            exact_alpha = np.where(
+                alpha >= self.source_pixel_threshold,
+                255,
+                0,
+            ).astype(np.uint8)
+            alpha_image = Image.fromarray(
+                exact_alpha,
+                mode="L",
+            )
+        else:
+            alpha_image = Image.fromarray(
+                alpha,
+                mode="L",
+            )
+            alpha_image = alpha_image.filter(
+                ImageFilter.GaussianBlur(radius=0.20)
+            )
 
         rgba = crop.convert("RGBA")
         rgba.putalpha(alpha_image)
@@ -384,12 +411,25 @@ class PageRenderer:
             background_rgb,
         )
 
-        # Text needs a slightly more faithful mask than visual
-        # regions. Keep antialiased edge pixels.
-        alpha_image = Image.fromarray(
-            alpha,
-            mode="L",
-        )
+        # Text is especially sensitive to alpha blending. In V3,
+        # preserve every source pixel that is measurably different
+        # from the page background. This keeps the original glyph
+        # anti-aliasing instead of generating a new edge.
+        if self.exact_source_pixels:
+            exact_alpha = np.where(
+                alpha >= self.source_pixel_threshold,
+                255,
+                0,
+            ).astype(np.uint8)
+            alpha_image = Image.fromarray(
+                exact_alpha,
+                mode="L",
+            )
+        else:
+            alpha_image = Image.fromarray(
+                alpha,
+                mode="L",
+            )
 
         rgba = crop.convert("RGBA")
         rgba.putalpha(alpha_image)

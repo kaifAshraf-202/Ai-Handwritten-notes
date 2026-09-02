@@ -1,0 +1,324 @@
+{
+  "pdf": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\uploads\\test.pdf",
+  "total_pdf_pages": 428,
+  "page_start": 80,
+  "page_end": 90,
+  "dpi": 200,
+  "language": "eng",
+  "psm": 3,
+  "results": [
+    {
+      "page": 80,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 6,
+        "visual_regions": 11,
+        "semantic_regions": 11,
+        "layout_blocks": 1,
+        "text_classifications": 17,
+        "visual_classifications": 11
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_080.png",
+      "metrics": {
+        "comparison_size": [
+          1200,
+          674
+        ],
+        "mae": 0.6016,
+        "exact_pixel_percent": 66.96,
+        "within_5_percent": 97.31,
+        "within_20_percent": 99.81,
+        "significant_difference_percent": 0.19,
+        "max_difference": 221
+      },
+      "seconds": 2.036
+    },
+    {
+      "page": 81,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 0,
+        "visual_regions": 1,
+        "semantic_regions": 1,
+        "layout_blocks": 1,
+        "text_classifications": 1,
+        "visual_classifications": 1
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_081.png",
+      "seconds": 0.736
+    },
+    {
+      "page": 82,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 0,
+        "visual_regions": 2,
+        "semantic_regions": 2,
+        "layout_blocks": 1,
+        "text_classifications": 2,
+        "visual_classifications": 2
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_082.png",
+      "seconds": 1.212
+    },
+    {
+      "page": 83,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 0,
+        "visual_regions": 4,
+        "semantic_regions": 4,
+        "layout_blocks": 1,
+        "text_classifications": 4,
+        "visual_classifications": 4
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_083.png",
+      "seconds": 1.067
+    },
+    {
+      "page": 84,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 2,
+        "visual_regions": 10,
+        "semantic_regions": 10,
+        "layout_blocks": 3,
+        "text_classifications": 12,
+        "visual_classifications": 10
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_084.png",
+      "seconds": 1.203
+    },
+    {
+      "page": 85,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 21,
+        "visual_regions": 32,
+        "semantic_regions": 32,
+        "layout_blocks": 23,
+        "text_classifications": 53,
+        "visual_classifications": 32
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_085.png",
+      "metrics": {
+        "comparison_size": [
+          1200,
+          674
+        ],
+        "mae": 0.691,
+        "exact_pixel_percent": 93.86,
+        "within_5_percent": 98.68,
+        "within_20_percent": 99.63,
+        "significant_difference_percent": 0.37,
+        "max_difference": 255
+      },
+      "seconds": 2.194
+    },
+    {
+      "page": 86,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 2,
+        "visual_regions": 20,
+        "semantic_regions": 20,
+        "layout_blocks": 5,
+        "text_classifications": 22,
+        "visual_classifications": 20
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_086.png",
+      "metrics": {
+        "comparison_size": [
+          1200,
+          674
+        ],
+        "mae": 0.3323,
+        "exact_pixel_percent": 86.29,
+        "within_5_percent": 95.71,
+        "within_20_percent": 99.89,
+        "significant_difference_percent": 0.11,
+        "max_difference": 255
+      },
+      "seconds": 2.057
+    },
+    {
+      "page": 87,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 0,
+        "visual_regions": 7,
+        "semantic_regions": 7,
+        "layout_blocks": 4,
+        "text_classifications": 7,
+        "visual_classifications": 7
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_087.png",
+      "seconds": 1.126
+    },
+    {
+      "page": 88,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 12,
+        "visual_regions": 19,
+        "semantic_regions": 19,
+        "layout_blocks": 10,
+        "text_classifications": 31,
+        "visual_classifications": 19
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_088.png",
+      "seconds": 1.629
+    },
+    {
+      "page": 89,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 21,
+        "visual_regions": 22,
+        "semantic_regions": 22,
+        "layout_blocks": 14,
+        "text_classifications": 43,
+        "visual_classifications": 22
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_089.png",
+      "seconds": 1.82
+    },
+    {
+      "page": 90,
+      "status": "passed",
+      "memory_before_mb": null,
+      "source_size": [
+        3556,
+        2000
+      ],
+      "page_model": "OK",
+      "counts": {
+        "text_blocks": 12,
+        "visual_regions": 16,
+        "semantic_regions": 16,
+        "layout_blocks": 11,
+        "text_classifications": 28,
+        "visual_classifications": 16
+      },
+      "rendered_size": [
+        3556,
+        2000
+      ],
+      "output_path": "D:\\KAIF ASHRAF\\Crazy Projects\\handnote-ai\\storage\\output\\full_pipeline_test\\rendered_pages\\page_090.png",
+      "metrics": {
+        "comparison_size": [
+          1200,
+          674
+        ],
+        "mae": 0.121,
+        "exact_pixel_percent": 93.54,
+        "within_5_percent": 99.05,
+        "within_20_percent": 100.0,
+        "significant_difference_percent": 0.0,
+        "max_difference": 18
+      },
+      "seconds": 1.784
+    }
+  ],
+  "last_processed_page": 90
+}
