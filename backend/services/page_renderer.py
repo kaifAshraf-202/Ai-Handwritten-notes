@@ -6,39 +6,34 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-# ============================================================
-# HELPERS
-# ============================================================
 
 BBox = Tuple[int, int, int, int]
 
+
+# ============================================================
+# HELPERS
+# ============================================================
 
 def _value(obj: Any, key: str, default: Any = None) -> Any:
     """Read a field from either a dict or an object."""
     if obj is None:
         return default
-
     if isinstance(obj, dict):
         return obj.get(key, default)
-
     return getattr(obj, key, default)
 
 
 def _bbox(obj: Any) -> BBox:
     """Return x, y, width, height from a region/block-like object."""
     return (
-        int(_value(obj, "x", 0)),
-        int(_value(obj, "y", 0)),
-        int(_value(obj, "width", 0)),
-        int(_value(obj, "height", 0)),
+        int(_value(obj, "x", 0) or 0),
+        int(_value(obj, "y", 0) or 0),
+        int(_value(obj, "width", 0) or 0),
+        int(_value(obj, "height", 0) or 0),
     )
 
 
-def _clip_bbox(
-    bbox: BBox,
-    width: int,
-    height: int,
-) -> BBox:
+def _clip_bbox(bbox: BBox, width: int, height: int) -> BBox:
     x, y, w, h = bbox
 
     x1 = max(0, min(width, x))
@@ -46,12 +41,7 @@ def _clip_bbox(
     x2 = max(x1, min(width, x + max(0, w)))
     y2 = max(y1, min(height, y + max(0, h)))
 
-    return (
-        x1,
-        y1,
-        x2 - x1,
-        y2 - y1,
-    )
+    return x1, y1, x2 - x1, y2 - y1
 
 
 def _intersection_area(a: BBox, b: BBox) -> int:
@@ -81,9 +71,7 @@ class PageRenderer:
     """
     Reconstruct a HandNote AI PageModel onto a clean canvas.
 
-    This renderer deliberately stays outside the analysis pipeline.
-
-    Existing architecture:
+    Architecture:
 
         OCR
           -> text blocks
@@ -96,19 +84,15 @@ class PageRenderer:
         PageRenderer
           -> reconstructed image
 
-    Important rendering rule:
+    Renderer V2 goals:
 
-        NEVER paste a complete source crop onto the output.
-
-    A source crop may contain a large black/white page background.
-    Pasting it directly creates the black rectangles seen in the
-    previous renderer output.
-
-    Instead, this renderer extracts foreground pixels and places
-    them on the reconstructed canvas.
-
-    The renderer is intentionally tolerant of both dataclass and
-    dictionary PageModel objects.
+    1. Never paste a complete source crop.
+    2. Preserve visual foreground from the source image.
+    3. Preserve original text pixels when possible instead of
+       redrawing OCR text with a generic font.
+    4. Fall back to OCR text rendering only when source pixels
+       cannot be used.
+    5. Keep compatibility with the existing PageRenderer API.
     """
 
     def __init__(
@@ -123,39 +107,27 @@ class PageRenderer:
         preserve_handwriting: bool = True,
         preserve_graphics: bool = True,
         preserve_diagrams: bool = True,
+        preserve_source_text: bool = True,
         debug: bool = False,
     ):
         self.background = background
-        self.foreground_threshold = int(
-            max(1, foreground_threshold)
-        )
-        self.alpha_threshold = int(
-            max(1, alpha_threshold)
-        )
+        self.foreground_threshold = max(1, int(foreground_threshold))
+        self.alpha_threshold = max(1, int(alpha_threshold))
 
-        self.visual_padding = int(
-            max(0, visual_padding)
-        )
-        self.text_padding = int(
-            max(0, text_padding)
-        )
+        self.visual_padding = max(0, int(visual_padding))
+        self.text_padding = max(0, int(text_padding))
 
         self.render_text = bool(render_text)
-        self.preserve_highlights = bool(
-            preserve_highlights
-        )
-        self.preserve_handwriting = bool(
-            preserve_handwriting
-        )
-        self.preserve_graphics = bool(
-            preserve_graphics
-        )
-        self.preserve_diagrams = bool(
-            preserve_diagrams
-        )
 
-        # Compatibility with the existing test suite.
-        # Debug mode does not change rendering behavior.
+        self.preserve_highlights = bool(preserve_highlights)
+        self.preserve_handwriting = bool(preserve_handwriting)
+        self.preserve_graphics = bool(preserve_graphics)
+        self.preserve_diagrams = bool(preserve_diagrams)
+
+        # V2: preserve source text pixels before using font rendering.
+        self.preserve_source_text = bool(preserve_source_text)
+
+        # Existing tests pass debug=False.
         self.debug = bool(debug)
 
         self._font_cache: Dict[int, ImageFont.FreeTypeFont] = {}
@@ -165,29 +137,17 @@ class PageRenderer:
     # ========================================================
 
     @staticmethod
-    def get_page_model(
-        page_model: Any,
-    ) -> Any:
+    def get_page_model(page_model: Any) -> Any:
         """
         Accept either:
 
             PageModel
             PagePipelineResult.page
-
-        This makes the renderer compatible with both direct
-        PageModel usage and the existing pipeline result.
         """
         if page_model is None:
-            raise ValueError(
-                "page_model cannot be None"
-            )
+            raise ValueError("page_model cannot be None")
 
-        # PagePipelineResult
-        page = _value(
-            page_model,
-            "page",
-            None,
-        )
+        page = _value(page_model, "page", None)
 
         if page is not None:
             return page
@@ -203,12 +163,7 @@ class PageRenderer:
         image: Image.Image,
         size: int = 80,
     ) -> np.ndarray:
-        """
-        Collect pixels from page corners.
-
-        The corners are normally free from notes and are therefore
-        a much better background estimate than the whole image.
-        """
+        """Collect pixels from the four page corners."""
         rgb = image.convert("RGB")
         array = np.asarray(rgb)
 
@@ -238,57 +193,31 @@ class PageRenderer:
         """
         Estimate page background.
 
-        Supports the two important cases for HandNote AI:
-
-            white notebook/page
-            blackboard/black page
-
-        A robust median of the corner pixels is used, with a small
-        quantization step to avoid antialiasing noise.
+        Supports dark pages and light pages.
         """
-        if isinstance(
-            self.background,
-            tuple,
-        ):
+        if isinstance(self.background, tuple):
             return tuple(
                 int(max(0, min(255, v)))
                 for v in self.background
             )
 
-        mode = str(
-            self.background
-        ).lower().strip()
+        mode = str(self.background).lower().strip()
 
-        if mode in {
-            "white",
-            "light",
-        }:
+        if mode in {"white", "light"}:
             return (255, 255, 255)
 
-        if mode in {
-            "black",
-            "dark",
-        }:
+        if mode in {"black", "dark"}:
             return (0, 0, 0)
 
-        pixels = self._corner_pixels(
-            image
-        )
+        pixels = self._corner_pixels(image)
 
-        # Add a thin border sample. This helps when a crop's corners
-        # accidentally fall inside a foreground stroke.
-        array = np.asarray(
-            image.convert("RGB")
-        )
+        array = np.asarray(image.convert("RGB"))
 
         h, w = array.shape[:2]
+
         border = max(
             1,
-            min(
-                12,
-                h // 10,
-                w // 10,
-            ),
+            min(12, h // 10, w // 10),
         )
 
         border_parts = [
@@ -299,32 +228,22 @@ class PageRenderer:
         ]
 
         pixels = np.concatenate(
-            [
-                pixels,
-                *border_parts,
-            ],
+            [pixels, *border_parts],
             axis=0,
         )
 
-        median = np.median(
-            pixels,
-            axis=0,
-        )
+        median = np.median(pixels, axis=0)
 
-        # Snap very dark/light backgrounds to their exact values.
         if float(np.mean(median)) < 35:
             return (0, 0, 0)
 
         if float(np.mean(median)) > 220:
             return (255, 255, 255)
 
-        return tuple(
-            int(round(v))
-            for v in median
-        )
+        return tuple(int(round(v)) for v in median)
 
     # ========================================================
-    # FOREGROUND MASK
+    # MASKS
     # ========================================================
 
     def create_foreground_mask(
@@ -333,18 +252,16 @@ class PageRenderer:
         background_rgb: Tuple[int, int, int],
     ) -> np.ndarray:
         """
-        Create a soft alpha mask from a source crop.
+        Create a soft foreground alpha mask based on color distance
+        from the supplied background.
 
-        Unlike a simple grayscale threshold, this works for:
-
-            white ink on black
-            black ink on white
-            yellow/orange highlights
-            green/blue handwriting
-            pink/magenta annotations
-
-        The mask is based primarily on color distance from the
-        page background.
+        This preserves:
+            - white ink on black
+            - black ink on white
+            - yellow/orange highlights
+            - colored handwriting
+            - diagrams
+            - graphics
         """
         rgb = np.asarray(
             crop.convert("RGB"),
@@ -356,52 +273,27 @@ class PageRenderer:
             dtype=np.float32,
         ).reshape(1, 1, 3)
 
-        distance = np.linalg.norm(
-            rgb - bg,
-            axis=2,
-        )
+        distance = np.linalg.norm(rgb - bg, axis=2)
 
-        # Convert distance into soft alpha.
-        threshold = float(
-            self.foreground_threshold
-        )
+        threshold = float(self.foreground_threshold)
 
         alpha = np.clip(
-            (
-                distance - threshold
-            )
-            / max(
-                1.0,
-                255.0 - threshold,
-            ),
+            (distance - threshold)
+            / max(1.0, 255.0 - threshold),
             0.0,
             1.0,
         )
 
-        # Boost genuinely different pixels.
-        strong = distance >= (
-            threshold * 2.2
-        )
+        strong = distance >= threshold * 2.2
 
         alpha[strong] = np.maximum(
             alpha[strong],
             0.75,
         )
 
-        # Remove tiny near-background variations.
-        alpha[
-            distance < self.alpha_threshold
-        ] = 0.0
+        alpha[distance < self.alpha_threshold] = 0.0
 
-        return (
-            alpha * 255.0
-        ).astype(
-            np.uint8
-        )
-
-    # ========================================================
-    # SOURCE FOREGROUND EXTRACTION
-    # ========================================================
+        return (alpha * 255.0).astype(np.uint8)
 
     def extract_foreground(
         self,
@@ -413,7 +305,8 @@ class PageRenderer:
         """
         Extract only foreground pixels from a source region.
 
-        The returned image is RGBA and has transparent background.
+        The returned image is RGBA with the estimated background
+        made transparent.
         """
         x, y, w, h = _clip_bbox(
             (
@@ -430,12 +323,7 @@ class PageRenderer:
             return None
 
         crop = source_image.crop(
-            (
-                x,
-                y,
-                x + w,
-                y + h,
-            )
+            (x, y, x + w, y + h)
         ).convert("RGB")
 
         alpha = self.create_foreground_mask(
@@ -443,30 +331,106 @@ class PageRenderer:
             background_rgb,
         )
 
-        # Slightly close tiny holes in antialiased strokes.
         alpha_image = Image.fromarray(
             alpha,
             mode="L",
         )
 
         alpha_image = alpha_image.filter(
-            ImageFilter.GaussianBlur(
-                radius=0.25
-            )
+            ImageFilter.GaussianBlur(radius=0.20)
         )
 
-        rgba = crop.convert(
-            "RGBA"
-        )
-
-        rgba.putalpha(
-            alpha_image
-        )
+        rgba = crop.convert("RGBA")
+        rgba.putalpha(alpha_image)
 
         return rgba
 
     # ========================================================
-    # CLASSIFICATION LOOKUP
+    # SOURCE TEXT PRESERVATION
+    # ========================================================
+
+    def extract_source_text(
+        self,
+        source_image: Image.Image,
+        bbox: BBox,
+        background_rgb: Tuple[int, int, int],
+    ) -> Optional[Image.Image]:
+        """
+        V2 text extraction.
+
+        Instead of recreating OCR text with Arial/DejaVu, use the
+        original text pixels from the source image and make only the
+        page background transparent.
+
+        Because the output canvas uses the same background color,
+        compositing these pixels preserves the original typography,
+        antialiasing and stroke thickness much more accurately.
+        """
+        x, y, w, h = _clip_bbox(
+            bbox,
+            source_image.width,
+            source_image.height,
+        )
+
+        if w <= 0 or h <= 0:
+            return None
+
+        crop = source_image.crop(
+            (x, y, x + w, y + h)
+        ).convert("RGB")
+
+        alpha = self.create_foreground_mask(
+            crop,
+            background_rgb,
+        )
+
+        # Text needs a slightly more faithful mask than visual
+        # regions. Keep antialiased edge pixels.
+        alpha_image = Image.fromarray(
+            alpha,
+            mode="L",
+        )
+
+        rgba = crop.convert("RGBA")
+        rgba.putalpha(alpha_image)
+
+        return rgba
+
+    def _source_text_ink_ratio(
+        self,
+        source_image: Image.Image,
+        bbox: BBox,
+        background_rgb: Tuple[int, int, int],
+    ) -> float:
+        """
+        Estimate whether a text bbox actually contains useful source
+        pixels.
+
+        This prevents empty/incorrect OCR boxes from producing a
+        visible artifact.
+        """
+        x, y, w, h = _clip_bbox(
+            bbox,
+            source_image.width,
+            source_image.height,
+        )
+
+        if w <= 0 or h <= 0:
+            return 0.0
+
+        crop = source_image.crop(
+            (x, y, x + w, y + h)
+        ).convert("RGB")
+
+        alpha = self.create_foreground_mask(
+            crop,
+            background_rgb,
+        )
+
+        return float(np.count_nonzero(alpha > 20)) / float(max(1, w * h))
+
+    # ========================================================
+    # CLASSIFICATION
     # ========================================================
 
     @staticmethod
@@ -476,20 +440,11 @@ class PageRenderer:
         result: Dict[int, str] = {}
 
         for item in classifications or []:
-            region_id = _value(
-                item,
-                "region_id",
-                0,
-            )
+            region_id = _value(item, "region_id", 0)
 
             try:
-                region_id = int(
-                    region_id
-                )
-            except (
-                ValueError,
-                TypeError,
-            ):
+                region_id = int(region_id)
+            except (ValueError, TypeError):
                 continue
 
             label = str(
@@ -504,10 +459,6 @@ class PageRenderer:
                 result[region_id] = label
 
         return result
-
-    # ========================================================
-    # VISUAL REGION FILTER
-    # ========================================================
 
     def should_render_visual(
         self,
@@ -529,7 +480,6 @@ class PageRenderer:
         if label == "diagram":
             return self.preserve_diagrams
 
-        # Unknown visual classifications are preserved by default.
         return True
 
     # ========================================================
@@ -541,14 +491,7 @@ class PageRenderer:
         bbox: BBox,
         ocr_words: Iterable[Any],
     ) -> float:
-        """
-        Calculate how much OCR word area overlaps a region.
-
-        Used only to avoid rendering the same visible text twice.
-        """
-        region_area = _area(
-            bbox
-        )
+        region_area = _area(bbox)
 
         if region_area <= 0:
             return 0.0
@@ -557,10 +500,10 @@ class PageRenderer:
 
         for word in ocr_words or []:
             word_bbox = (
-                int(_value(word, "left", 0)),
-                int(_value(word, "top", 0)),
-                int(_value(word, "width", 0)),
-                int(_value(word, "height", 0)),
+                int(_value(word, "left", 0) or 0),
+                int(_value(word, "top", 0) or 0),
+                int(_value(word, "width", 0) or 0),
+                int(_value(word, "height", 0) or 0),
             )
 
             overlap += _intersection_area(
@@ -573,21 +516,13 @@ class PageRenderer:
             overlap / float(region_area),
         )
 
-    # ========================================================
-    # COVERAGE MAP
-    # ========================================================
-
     @staticmethod
     def build_visual_coverage(
         image_size: Tuple[int, int],
         regions: Iterable[Any],
     ) -> np.ndarray:
         """
-        Build a low-memory binary map of pixels occupied by visual
-        regions.
-
-        This prevents OCR text from being rendered on top of an
-        already-preserved visual region.
+        Build a binary visual-region coverage map.
         """
         width, height = image_size
 
@@ -614,17 +549,15 @@ class PageRenderer:
         return coverage
 
     # ========================================================
-    # FONT
+    # FONT FALLBACK
     # ========================================================
 
-    def _load_font(
-        self,
-        size: int,
-    ):
-        size = max(
-            8,
-            int(size),
-        )
+    def _load_font(self, size: int):
+        """
+        Font fallback used only when source-pixel text preservation
+        is not possible.
+        """
+        size = max(8, int(size))
 
         if size in self._font_cache:
             return self._font_cache[size]
@@ -680,8 +613,58 @@ class PageRenderer:
         return (0, 0, 0)
 
     # ========================================================
-    # TEXT BLOCK RENDERING
+    # TEXT RENDERING
     # ========================================================
+
+    def _fallback_render_text(
+        self,
+        output: Image.Image,
+        block: Any,
+        text: str,
+        bbox: BBox,
+        background_rgb: Tuple[int, int, int],
+    ) -> None:
+        """
+        Last-resort OCR text renderer.
+        """
+        draw = ImageDraw.Draw(output)
+
+        confidence = float(
+            _value(block, "confidence", 0.0) or 0.0
+        )
+
+        classification = str(
+            _value(
+                block,
+                "classification",
+                _value(block, "content_type", ""),
+            )
+        ).lower().strip()
+
+        if (
+            classification == "uncertain_text"
+            and confidence < 45.0
+        ):
+            if bbox[2] < 80 or bbox[3] < 25:
+                return
+
+        font_size = max(
+            12,
+            int(bbox[3] * 0.72),
+        )
+
+        font = self._load_font(font_size)
+
+        draw.multiline_text(
+            (bbox[0], bbox[1]),
+            text,
+            fill=self.choose_text_color(background_rgb),
+            font=font,
+            spacing=max(
+                2,
+                int(font_size * 0.18),
+            ),
+        )
 
     def render_text_blocks(
         self,
@@ -689,41 +672,26 @@ class PageRenderer:
         text_blocks: Iterable[Any],
         visual_regions: Iterable[Any],
         background_rgb: Tuple[int, int, int],
+        source_image: Optional[Image.Image] = None,
     ) -> None:
         """
-        Render OCR-reconstructed text only where it is not already
-        represented by a preserved visual region.
+        Render OCR text.
 
-        Text classification is intentionally respected:
+        V2 priority:
 
-            reliable_text
-                -> render
+            source text pixels
+                    ↓
+            OCR/font fallback
 
-            symbol_or_visual
-                -> render conservatively
-
-            uncertain_text
-                -> render only if reasonably large
+        This is the main fidelity improvement.
         """
         if not self.render_text:
             return
 
-        draw = ImageDraw.Draw(
-            output
-        )
-
         visual_boxes = [
             _bbox(region)
-            for region in (
-                visual_regions or []
-            )
+            for region in (visual_regions or [])
         ]
-
-        text_color = (
-            self.choose_text_color(
-                background_rgb
-            )
-        )
 
         for block in text_blocks or []:
             text = str(
@@ -737,18 +705,12 @@ class PageRenderer:
             if not text:
                 continue
 
-            bbox = _bbox(
-                block
-            )
+            bbox = _bbox(block)
 
             if bbox[2] <= 0 or bbox[3] <= 0:
                 continue
 
-            # Skip blocks substantially represented by visual content.
-            block_area = max(
-                1,
-                _area(bbox),
-            )
+            block_area = max(1, _area(bbox))
 
             covered = sum(
                 _intersection_area(
@@ -763,67 +725,51 @@ class PageRenderer:
                 covered / float(block_area),
             )
 
+            # Visual regions already contain the source pixels.
             if coverage >= 0.35:
                 continue
 
-            confidence = float(
-                _value(
-                    block,
-                    "confidence",
-                    0.0,
-                )
-                or 0.0
-            )
-
-            classification = str(
-                _value(
-                    block,
-                    "classification",
-                    _value(
-                        block,
-                        "content_type",
-                        "",
-                    ),
-                )
-            ).lower().strip()
-
+            # ----------------------------------------------------
+            # V2: use exact source text pixels
+            # ----------------------------------------------------
             if (
-                classification == "uncertain_text"
-                and confidence < 45.0
+                self.preserve_source_text
+                and source_image is not None
             ):
-                # Keep large uncertain blocks because they can still
-                # contain useful equations/headings.
-                if bbox[2] < 80 or bbox[3] < 25:
-                    continue
+                ink_ratio = self._source_text_ink_ratio(
+                    source_image,
+                    bbox,
+                    background_rgb,
+                )
 
-            # Estimate font from the detected block height.
-            font_size = max(
-                12,
-                int(
-                    bbox[3] * 0.72
-                ),
-            )
+                # Text normally occupies only a fraction of its bbox.
+                # A tiny ratio means this OCR box is probably wrong.
+                if ink_ratio >= 0.005:
+                    source_text = self.extract_source_text(
+                        source_image,
+                        bbox,
+                        background_rgb,
+                    )
 
-            font = self._load_font(
-                font_size
-            )
+                    if source_text is not None:
+                        output.alpha_composite(
+                            source_text,
+                            (
+                                bbox[0],
+                                bbox[1],
+                            ),
+                        )
+                        continue
 
-            x = bbox[0]
-            y = bbox[1]
-
-            # Use multiline rendering when OCR returned line breaks.
-            draw.multiline_text(
-                (
-                    x,
-                    y,
-                ),
-                text,
-                fill=text_color,
-                font=font,
-                spacing=max(
-                    2,
-                    int(font_size * 0.18),
-                ),
+            # ----------------------------------------------------
+            # Fallback
+            # ----------------------------------------------------
+            self._fallback_render_text(
+                output=output,
+                block=block,
+                text=text,
+                bbox=bbox,
+                background_rgb=background_rgb,
             )
 
     # ========================================================
@@ -839,9 +785,9 @@ class PageRenderer:
         background_rgb: Tuple[int, int, int],
     ) -> None:
         """
-        Render each visual region as transparent foreground pixels.
+        Render visual regions as transparent foreground pixels.
 
-        This is the core fix for the previous black-rectangle bug.
+        Complete source crops are never pasted.
         """
         classification_map = (
             self.build_visual_classification_map(
@@ -849,14 +795,10 @@ class PageRenderer:
             )
         )
 
-        # Parent/source regions can be duplicated in some pipeline
-        # configurations. Render each exact bbox only once.
         seen = set()
 
         for region in visual_regions or []:
-            bbox = _bbox(
-                region
-            )
+            bbox = _bbox(region)
 
             if _area(bbox) <= 0:
                 continue
@@ -866,8 +808,7 @@ class PageRenderer:
                     region,
                     "region_id",
                     0,
-                )
-                or 0
+                ) or 0
             )
 
             classification = classification_map.get(
@@ -896,41 +837,37 @@ class PageRenderer:
 
             seen.add(key)
 
-            # For visual objects such as embedded diagrams/graphics,
-            # estimate the background from the crop itself. This is
-            # important when a white page contains a black figure or
-            # when a black page contains a white figure.
-            #
-            # Highlights are different: their yellow/orange fill is
-            # the actual content, so they must use the page background
-            # estimate rather than the local crop background.
+            # Highlights are page-level foreground.
             if classification == "highlight":
                 local_background = background_rgb
             else:
-                local_background = self.estimate_background(
-                    source_image.crop(
-                        (
-                            max(0, bbox[0]),
-                            max(0, bbox[1]),
-                            min(
-                                source_image.width,
-                                bbox[0] + bbox[2],
-                            ),
-                            min(
-                                source_image.height,
-                                bbox[1] + bbox[3],
-                            ),
-                        )
+                crop_x, crop_y, crop_w, crop_h = _clip_bbox(
+                    bbox,
+                    source_image.width,
+                    source_image.height,
+                )
+
+                if crop_w <= 0 or crop_h <= 0:
+                    continue
+
+                local_crop = source_image.crop(
+                    (
+                        crop_x,
+                        crop_y,
+                        crop_x + crop_w,
+                        crop_y + crop_h,
                     )
                 )
 
-            foreground = (
-                self.extract_foreground(
-                    source_image=source_image,
-                    bbox=bbox,
-                    background_rgb=local_background,
-                    padding=self.visual_padding,
+                local_background = self.estimate_background(
+                    local_crop
                 )
+
+            foreground = self.extract_foreground(
+                source_image=source_image,
+                bbox=bbox,
+                background_rgb=local_background,
+                padding=self.visual_padding,
             )
 
             if foreground is None:
@@ -939,12 +876,30 @@ class PageRenderer:
             x = bbox[0] - self.visual_padding
             y = bbox[1] - self.visual_padding
 
+            # Keep compositing inside the page.
+            if x < 0 or y < 0:
+                # Re-crop if padding crosses the page boundary.
+                left_crop = max(0, -x)
+                top_crop = max(0, -y)
+
+                foreground = foreground.crop(
+                    (
+                        left_crop,
+                        top_crop,
+                        foreground.width,
+                        foreground.height,
+                    )
+                )
+
+                x = max(0, x)
+                y = max(0, y)
+
+            if foreground.width <= 0 or foreground.height <= 0:
+                continue
+
             output.alpha_composite(
                 foreground,
-                (
-                    max(0, x),
-                    max(0, y),
-                ),
+                (x, y),
             )
 
     # ========================================================
@@ -956,44 +911,32 @@ class PageRenderer:
         page_model: Any,
         source_image: Image.Image,
         *,
-        output_path: Optional[
-            Union[str, Path]
-        ] = None,
+        output_path: Optional[Union[str, Path]] = None,
     ) -> Image.Image:
         """
         Render a PageModel.
 
-        Preferred call:
+        Supported:
+
+            renderer.render(page, image)
 
             renderer.render(
-                page_model=page,
-                source_image=image,
+                page,
+                image,
+                output_path="output.png",
             )
-
-        Also supports:
-
-            renderer.render(page, image, output_path=...)
         """
-        page = self.get_page_model(
-            page_model
-        )
+        page = self.get_page_model(page_model)
 
-        if not isinstance(
-            source_image,
-            Image.Image,
-        ):
+        if not isinstance(source_image, Image.Image):
             raise TypeError(
                 "source_image must be a PIL.Image.Image"
             )
 
-        source = source_image.convert(
-            "RGB"
-        )
+        source = source_image.convert("RGB")
 
-        background_rgb = (
-            self.estimate_background(
-                source
-            )
+        background_rgb = self.estimate_background(
+            source
         )
 
         width = int(
@@ -1014,26 +957,15 @@ class PageRenderer:
             or source.height
         )
 
-        # If model dimensions differ from the actual source image,
-        # use the source dimensions because all region coordinates
-        # are defined relative to that rendered source page.
-        if (
-            width != source.width
-            or height != source.height
-        ):
+        # Region coordinates are based on the actual source image.
+        if width != source.width or height != source.height:
             width = source.width
             height = source.height
 
         output = Image.new(
             "RGBA",
-            (
-                width,
-                height,
-            ),
-            (
-                *background_rgb,
-                255,
-            ),
+            (width, height),
+            (*background_rgb, 255),
         )
 
         visual_regions = _value(
@@ -1055,7 +987,7 @@ class PageRenderer:
         ) or []
 
         # --------------------------------------------------------
-        # Layer 1: visual foreground
+        # Layer 1: visuals
         # --------------------------------------------------------
 
         self.render_visual_regions(
@@ -1067,7 +999,7 @@ class PageRenderer:
         )
 
         # --------------------------------------------------------
-        # Layer 2: reconstructed text
+        # Layer 2: text
         # --------------------------------------------------------
 
         self.render_text_blocks(
@@ -1075,28 +1007,19 @@ class PageRenderer:
             text_blocks=text_blocks,
             visual_regions=visual_regions,
             background_rgb=background_rgb,
+            source_image=source,
         )
 
         # --------------------------------------------------------
         # Final image
         # --------------------------------------------------------
 
-        final_image = output.convert(
-            "RGB"
-        )
+        final_image = output.convert("RGB")
 
         if output_path is not None:
-            path = Path(
-                output_path
-            )
-
-            path.parent.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-
-            final_image.save(
-                path
+            self.save(
+                final_image,
+                output_path,
             )
 
         return final_image
@@ -1109,9 +1032,7 @@ class PageRenderer:
         self,
         page_model: Any,
         source_image: Image.Image,
-        output_path: Optional[
-            Union[str, Path]
-        ] = None,
+        output_path: Optional[Union[str, Path]] = None,
     ) -> Image.Image:
         """Compatibility alias for render()."""
         return self.render(
@@ -1124,9 +1045,7 @@ class PageRenderer:
         self,
         page_model: Any,
         source_image: Image.Image,
-        output_path: Optional[
-            Union[str, Path]
-        ] = None,
+        output_path: Optional[Union[str, Path]] = None,
     ) -> Image.Image:
         """Compatibility alias for render()."""
         return self.render(
@@ -1138,13 +1057,13 @@ class PageRenderer:
     def render_to_file(
         self,
         page_model: Any,
-        source_image: Union[Image.Image, str, Path, None] = None,
+        source_image: Union[Image.Image, str, Path],
         output_path: Optional[Union[str, Path]] = None,
     ) -> Image.Image:
         """
         Render and save in one operation.
 
-        Supported forms:
+        Preferred:
 
             renderer.render_to_file(
                 page_model,
@@ -1152,35 +1071,43 @@ class PageRenderer:
                 output_path,
             )
 
-        or, for an already-rendered image:
+        Compatibility form also supported:
 
             renderer.render_to_file(
                 rendered_image,
                 output_path,
             )
+
+        The second form is useful for older test scripts that first
+        call render_page() and then ask the renderer to save the
+        returned PIL image.
         """
+        if isinstance(page_model, Image.Image):
+            rendered_image = page_model
 
-        # Compatibility form:
-        # renderer.render_to_file(rendered_image, output_path)
-        if output_path is None:
-            if (
-                isinstance(page_model, Image.Image)
-                and isinstance(source_image, (str, Path))
-            ):
-                self.save(
-                    image=page_model,
-                    output_path=source_image,
+            # Compatibility call:
+            # render_to_file(rendered_image, output_path)
+            if output_path is None:
+                output_path = source_image
+
+            if output_path is None:
+                raise ValueError(
+                    "output_path is required when saving a rendered image"
                 )
-                return page_model
 
-            raise TypeError(
-                "render_to_file() expected either "
-                "(page_model, source_image, output_path) "
-                "or (rendered_image, output_path)."
+            self.save(
+                rendered_image,
+                output_path,
             )
 
-        # Normal form:
-        # renderer.render_to_file(page_model, source_image, output_path)
+            return rendered_image
+
+        if output_path is None:
+            raise TypeError(
+                "render_to_file() requires "
+                "(page_model, source_image, output_path)"
+            )
+
         if not isinstance(source_image, Image.Image):
             raise TypeError(
                 "source_image must be a PIL.Image.Image"
@@ -1198,16 +1125,15 @@ class PageRenderer:
         output_path: Union[str, Path],
     ) -> str:
         """
-        Save a rendered page image to disk.
+        Save a rendered image.
 
-        Returns the absolute path of the saved PNG.
+        This method intentionally belongs to PageRenderer so both
+        old and new test callers work:
+
+            renderer.save(image, path)
         """
-        if not isinstance(image, Image.Image):
-            raise TypeError(
-                "image must be a PIL.Image.Image"
-            )
-
         output_path = Path(output_path)
+
         output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
@@ -1221,19 +1147,19 @@ class PageRenderer:
             format="PNG",
         )
 
-        return str(output_path.resolve())
+        return str(
+            output_path.resolve()
+        )
 
 
 # ============================================================
-# CONVENIENCE FUNCTION
+# FUNCTIONAL API
 # ============================================================
 
 def render_page(
     page_model: Any,
     source_image: Image.Image,
-    output_path: Optional[
-        Union[str, Path]
-    ] = None,
+    output_path: Optional[Union[str, Path]] = None,
 ) -> Image.Image:
     """
     Functional API for callers that do not want to instantiate
